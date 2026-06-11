@@ -1,5 +1,6 @@
-const OpenAI = require('openai');
+﻿const OpenAI = require('openai');
 const { loadPersonas } = require('./personaLoader');
+const { getRuntimeConfig } = require('./runtimeConfig');
 
 const RISK_LEVELS = ['낮음', '보통', '높음', '긴급'];
 const IMPORTANT_KEYWORDS = ['법정', '감사', '의회', '예산', '재난', '안전', '보고', '제출', '회신', '긴급', '즉시'];
@@ -12,11 +13,16 @@ async function analyzeDocument(document) {
   const documentContext = buildDocumentContext(document);
   const ruleEvaluation = evaluateDocumentRisk(documentContext.content, documentContext.deadline, documentContext.departments);
   const aiEvaluation = await evaluateWithOpenAI(document, documentContext, ruleEvaluation);
-  const personaResult = evaluateAllPersonas(document, personas, {
+  const rulePersonaResult = evaluateAllPersonas(document, personas, {
     ...documentContext,
     documentRisk: ruleEvaluation,
     aiEvaluation
   });
+  const personaResult = await evaluatePersonasWithOpenAI(document, personas, {
+    ...documentContext,
+    documentRisk: ruleEvaluation,
+    aiEvaluation
+  }, rulePersonaResult);
   const importance = calculateFinalImportance(aiEvaluation, ruleEvaluation, personaResult.personaEvaluation);
 
   return {
@@ -35,7 +41,8 @@ async function analyzeDocument(document) {
 
 async function extractProductionDocumentInfo(document) {
   const fallback = buildProductionInfoFallback(document, 'rule-fallback-no-key');
-  const apiKey = process.env.OPENAI || process.env.OPENAI_API_KEY;
+  const config = getRuntimeConfig();
+  const apiKey = config.openaiKey;
 
   if (!apiKey) {
     return fallback;
@@ -44,7 +51,7 @@ async function extractProductionDocumentInfo(document) {
   try {
     const client = new OpenAI({ apiKey });
     const response = await client.chat.completions.create({
-      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      model: config.openaiModel || 'gpt-4o-mini',
       temperature: 0,
       messages: [
         {
@@ -163,6 +170,7 @@ function extractRecipientCandidates(content, ownDepartment) {
 
 function normalizeDateLike(value) {
   const text = String(value || '').trim();
+  const currentYear = String(new Date().getFullYear());
 
   if (!text) {
     return '';
@@ -178,11 +186,22 @@ function normalizeDateLike(value) {
     return `${korean[1]}-${korean[2].padStart(2, '0')}-${korean[3].padStart(2, '0')}`;
   }
 
+  const koreanWithoutYear = text.match(/(\d{1,2})\s*월\s*(\d{1,2})\s*일/);
+  if (koreanWithoutYear) {
+    return `${currentYear}-${koreanWithoutYear[1].padStart(2, '0')}-${koreanWithoutYear[2].padStart(2, '0')}`;
+  }
+
+  const shortDate = text.match(/(?<!\d)(\d{1,2})\s*[.\/]\s*(\d{1,2})\s*[.\/]?/);
+  if (shortDate) {
+    return `${currentYear}-${shortDate[1].padStart(2, '0')}-${shortDate[2].padStart(2, '0')}`;
+  }
+
   return '';
 }
 
 async function evaluateWithOpenAI(document, context, fallbackRisk) {
-  const apiKey = process.env.OPENAI || process.env.OPENAI_API_KEY;
+  const config = getRuntimeConfig();
+  const apiKey = config.openaiKey;
 
   if (!apiKey) {
     return buildRuleAiFallback(context, fallbackRisk, 'rule-fallback-no-key');
@@ -191,7 +210,7 @@ async function evaluateWithOpenAI(document, context, fallbackRisk) {
   try {
     const client = new OpenAI({ apiKey });
     const response = await client.chat.completions.create({
-      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      model: config.openaiModel || 'gpt-4o-mini',
       temperature: 0.2,
       messages: [
         {
@@ -227,10 +246,11 @@ async function evaluateWithOpenAI(document, context, fallbackRisk) {
 
 function normalizeAiEvaluation(value, context, fallbackRisk, aiMode, errorMessage) {
   const source = value && typeof value === 'object' ? value : {};
+  const normalizedDeadline = normalizeDateLike(source.deadline) || normalizeDateLike(context.deadline);
 
   return {
     summary: source.summary || summarize(context.content),
-    deadline: source.deadline || context.deadline || '',
+    deadline: normalizedDeadline || '',
     departments: normalizeStringArray(source.departments, context.departments),
     requiredActions: normalizeStringArray(source.requiredActions, extractRequiredActions(context.content)),
     importance: RISK_LEVELS.includes(source.importance) ? source.importance : fallbackRisk.riskLevel,
@@ -263,6 +283,145 @@ function evaluateAllPersonas(document, personas, context) {
     personaEvaluation: buildPersonaEvaluation(evaluations, personaPanel),
     personaPanel
   };
+}
+
+async function evaluatePersonasWithOpenAI(document, personas, context, fallbackResult) {
+  const config = getRuntimeConfig();
+  const apiKey = config.openaiKey;
+
+  if (!apiKey) {
+    return fallbackResult;
+  }
+
+  const candidates = fallbackResult.personaPanel.slice(0, 25).map((persona) => ({
+    id: persona.id,
+    name: persona.name,
+    role: persona.role,
+    department: persona.department,
+    score: persona.score,
+    riskLevel: persona.riskLevel,
+    matchedKeywords: persona.matchedKeywords,
+    comment: persona.comment
+  }));
+
+  try {
+    const client = new OpenAI({ apiKey });
+    const response = await client.chat.completions.create({
+      model: config.openaiModel || 'gpt-4o-mini',
+      temperature: 0.1,
+      messages: [
+        {
+          role: 'system',
+          content: [
+            '너는 한국 공문 업무관리 시스템의 2차 페르소나 평가자다.',
+            '1차 AI 평가 결과와 후보 페르소나를 보고 실제 업무상 영향을 받을 페르소나를 선별한다.',
+            '공문의 기한, 담당부서, 필요조치, 위험도를 기준으로 페르소나별 점수와 코멘트를 다시 판단한다.',
+            '반드시 JSON만 반환한다.',
+            'JSON 필드는 personaEvaluation(object), personaPanel(array) 이다.',
+            'personaEvaluation 필드: totalPersonas, evaluatedPersonas, selectedPanelCount, riskDistribution, averageScore, maxScore, matchedDepartments, matchedRoles.',
+            'personaPanel 항목 필드: id, name, role, department, riskLevel, score, matchedKeywords, comment, sourceFile.',
+            'riskLevel은 낮음, 보통, 높음, 긴급 중 하나다.'
+          ].join('\n')
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            document: {
+              title: document.title,
+              sender: document.sender,
+              department: document.department,
+              deadline: context.deadline,
+              content: context.content.slice(0, 12000)
+            },
+            firstEvaluation: context.aiEvaluation,
+            ruleRisk: context.documentRisk,
+            totalPersonaCount: Array.isArray(personas) ? personas.length : 0,
+            candidatePersonas: candidates
+          })
+        }
+      ],
+      response_format: { type: 'json_object' }
+    });
+    const parsed = JSON.parse(response.choices[0].message.content);
+
+    return normalizeOpenAiPersonaResult(parsed, fallbackResult, personas);
+  } catch (error) {
+    return {
+      ...fallbackResult,
+      personaEvaluation: {
+        ...fallbackResult.personaEvaluation,
+        aiMode: 'rule-fallback-persona-openai-error',
+        errorMessage: error.message
+      }
+    };
+  }
+}
+
+function normalizeOpenAiPersonaResult(value, fallbackResult, personas) {
+  const source = value && typeof value === 'object' ? value : {};
+  const fallbackEvaluation = fallbackResult.personaEvaluation;
+  const fallbackPanel = fallbackResult.personaPanel;
+  const panel = Array.isArray(source.personaPanel) && source.personaPanel.length > 0
+    ? source.personaPanel.map((item, index) => normalizeOpenAiPersonaPanelItem(item, fallbackPanel[index])).filter(Boolean).slice(0, 10)
+    : fallbackPanel;
+  const riskDistribution = buildRiskDistribution(panel, source.personaEvaluation && source.personaEvaluation.riskDistribution);
+  const totalScore = panel.reduce((sum, item) => sum + (Number(item.score) || 0), 0);
+  const evaluation = source.personaEvaluation && typeof source.personaEvaluation === 'object'
+    ? source.personaEvaluation
+    : {};
+
+  return {
+    personaEvaluation: {
+      totalPersonas: Number(evaluation.totalPersonas) || (Array.isArray(personas) ? personas.length : fallbackEvaluation.totalPersonas),
+      evaluatedPersonas: Number(evaluation.evaluatedPersonas) || panel.length,
+      selectedPanelCount: panel.length,
+      riskDistribution,
+      averageScore: Number(evaluation.averageScore) || (panel.length > 0 ? Number((totalScore / panel.length).toFixed(2)) : 0),
+      maxScore: Number(evaluation.maxScore) || panel.reduce((max, item) => Math.max(max, Number(item.score) || 0), 0),
+      matchedDepartments: normalizeStringArray(evaluation.matchedDepartments, panel.map((item) => item.department).filter(Boolean)).slice(0, 20),
+      matchedRoles: normalizeStringArray(evaluation.matchedRoles, panel.map((item) => item.role).filter(Boolean)).slice(0, 20),
+      aiMode: 'openai-persona'
+    },
+    personaPanel: panel
+  };
+}
+
+function normalizeOpenAiPersonaPanelItem(item, fallback) {
+  const source = item && typeof item === 'object' ? item : {};
+  const base = fallback || {};
+  const riskLevel = RISK_LEVELS.includes(source.riskLevel) ? source.riskLevel : base.riskLevel || '낮음';
+
+  return {
+    id: source.id || base.id || '',
+    name: source.name || base.name || '-',
+    role: source.role || base.role || '-',
+    department: source.department || base.department || '',
+    riskLevel,
+    score: Number(source.score) || Number(base.score) || 0,
+    matchedKeywords: normalizeStringArray(source.matchedKeywords, base.matchedKeywords || []),
+    comment: source.comment || base.comment || '',
+    sourceFile: source.sourceFile || base.sourceFile || ''
+  };
+}
+
+function buildRiskDistribution(panel, sourceDistribution) {
+  const distribution = { 낮음: 0, 보통: 0, 높음: 0, 긴급: 0 };
+
+  if (sourceDistribution && typeof sourceDistribution === 'object') {
+    RISK_LEVELS.forEach((level) => {
+      distribution[level] = Number(sourceDistribution[level]) || 0;
+    });
+  }
+
+  if (Object.values(distribution).some((value) => value > 0)) {
+    return distribution;
+  }
+
+  panel.forEach((item) => {
+    distribution[RISK_LEVELS.includes(item.riskLevel) ? item.riskLevel : '낮음'] += 1;
+  });
+
+  return distribution;
 }
 
 function evaluatePersona(persona, document, context) {
@@ -555,15 +714,17 @@ function collectDateCandidates(source) {
 }
 
 function scoreDateCandidate(source, index, date) {
-  const before = source.slice(Math.max(0, index - 80), index);
-  const after = source.slice(index, Math.min(source.length, index + 100));
+  const before = source.slice(Math.max(0, index - 120), index);
+  const after = source.slice(index, Math.min(source.length, index + 140));
   const context = `${before} ${after}`;
   let score = 0;
 
-  if (/제출|회신|등록|신청|참여|진단|응답|납부|보고|검토|처리/.test(context)) score += 6;
-  if (/기한|마감|까지|완료|기일|기간/.test(context)) score += 8;
+  if (/제출|회신|등록|신청|참여|진단|응답|납부|보고|검토|처리|취합|제출처/.test(context)) score += 6;
+  if (/기한|마감|까지|완료|기일|기간|제출일|회신일|신청일|등록일/.test(context)) score += 8;
+  if (/제출\s*기한|회신\s*기한|자료\s*제출|의견\s*제출|제출\s*바람|회신\s*바람|까지\s*(제출|회신|등록|신청)/.test(context)) score += 12;
   if (/[~～-]\s*(?:20\d{2}[-.\/년\s]*)?\d{1,2}/.test(before) || /[~～-]/.test(before)) score += 5;
-  if (/시행|접수|작성|발송|관련|문서번호|감사관-\d+/.test(context)) score -= 7;
+  if (/시행일|접수일|작성일|발송일|문서번호|등록번호|접수번호|감사관-\d+/.test(context)) score -= 12;
+  else if (/시행|접수|작성|발송|관련|문서번호/.test(context)) score -= 5;
   if (/전화|팩스|우편|주소|사업비|예산|금액|원\b/.test(context)) score -= 3;
 
   const diffDays = getDueDateDiffDays(date);
@@ -650,3 +811,4 @@ module.exports = {
   analyzeDocument,
   extractProductionDocumentInfo
 };
+

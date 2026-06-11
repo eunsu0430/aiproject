@@ -1,6 +1,7 @@
 const path = require('path');
 const { Client } = require('@modelcontextprotocol/sdk/client/index.js');
 const { StdioClientTransport } = require('@modelcontextprotocol/sdk/client/stdio.js');
+const { getMcpEnv } = require('./runtimeConfig');
 
 const projectRoot = path.join(__dirname, '..', '..');
 const gmailMcpServerPath = path.join(projectRoot, 'server', 'mcp', 'gmailReminderMcpServer.js');
@@ -13,7 +14,7 @@ async function callEmailTool(name, args) {
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [gmailMcpServerPath],
-    env: process.env,
+    env: getMcpEnv(),
     stderr: 'pipe'
   });
 

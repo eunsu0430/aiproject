@@ -13,6 +13,9 @@ const reminderInputSchema = {
   recipientName: z.string().min(1),
   documentTitle: z.string().min(1),
   responseDueDate: z.string().optional(),
+  documentSummary: z.string().optional(),
+  progressText: z.string().optional(),
+  requiredAction: z.string().optional(),
   senderName: z.string().optional(),
   customMessage: z.string().optional()
 };
@@ -102,17 +105,24 @@ function buildReminderEmail(input) {
   const senderName = input.senderName || process.env.GMAIL_SENDER_NAME || '담당자';
   const dueText = input.responseDueDate ? `${input.responseDueDate}까지` : '기한 내';
   const subject = `[회신 요청] ${input.documentTitle}`;
-  const customMessage = input.customMessage ? `\n${input.customMessage.trim()}\n` : '';
+  const summary = input.documentSummary ? `- 공문 요약: ${input.documentSummary.trim()}` : '';
+  const progress = input.progressText ? `- 취합 현황: ${input.progressText.trim()}` : '';
+  const requiredAction = input.requiredAction || `${dueText} 자료 회신 부탁드립니다.`;
+  const customMessage = input.customMessage ? ['', input.customMessage.trim()].join('\n') : '';
   const body = [
     `${input.recipientName} 담당자님, 안녕하세요.`,
     '',
-    `아래 공문 관련 자료가 아직 회신되지 않아 확인 요청드립니다.`,
+    '아래 공문과 관련하여 요청드린 자료가 아직 회신되지 않아 확인 요청드립니다.',
     '',
     `- 공문명: ${input.documentTitle}`,
     `- 회신기한: ${dueText}`,
+    summary,
+    progress,
+    `- 요청사항: ${requiredAction}`,
     customMessage,
+    '',
     '이미 회신하셨다면 본 메일은 참고만 부탁드립니다.',
-    '확인 후 회신 부탁드립니다.',
+    '아직 회신 전이라면 기한 내 제출 가능 여부를 확인하여 회신 부탁드립니다.',
     '',
     '감사합니다.',
     senderName

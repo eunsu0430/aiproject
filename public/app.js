@@ -1,5 +1,3 @@
-const loginForm = document.getElementById('loginForm');
-const loginMessage = document.getElementById('loginMessage');
 const uploadForm = document.getElementById('uploadForm');
 const uploadMessage = document.getElementById('uploadMessage');
 const documentList = document.getElementById('documentList');
@@ -9,9 +7,14 @@ const calendar = document.getElementById('calendar');
 const calendarTitle = document.getElementById('calendarTitle');
 const prevMonthButton = document.getElementById('prevMonthButton');
 const nextMonthButton = document.getElementById('nextMonthButton');
-const logoutButton = document.getElementById('logoutButton');
 const documentTypeSelect = document.getElementById('documentType');
 const outgoingFields = document.getElementById('outgoingFields');
+const settingsButton = document.getElementById('settingsButton');
+const settingsModal = document.getElementById('settingsModal');
+const settingsForm = document.getElementById('settingsForm');
+const settingsMessage = document.getElementById('settingsMessage');
+const closeSettingsButton = document.getElementById('closeSettingsButton');
+const shutdownButton = document.getElementById('shutdownButton');
 
 let currentCalendarDate = new Date();
 let alertShownThisLoad = false;
@@ -28,6 +31,33 @@ async function loadDocuments() {
   renderCalendar(documents);
   renderDocumentRows(documents);
   showUrgentLoginAlert(documents);
+}
+
+async function loadSettings() {
+  if (!settingsForm) return;
+
+  const response = await fetch('/api/settings');
+  const settings = response.ok ? await response.json() : {};
+
+  setInputValue('openaiKey', settings.openaiKey || '');
+  setInputValue('openaiModel', settings.openaiModel || 'gpt-4o-mini');
+  setInputValue('gmailClientId', settings.gmailClientId || '');
+  setInputValue('gmailClientSecret', settings.gmailClientSecret || '');
+  setInputValue('gmailRefreshToken', settings.gmailRefreshToken || '');
+  setInputValue('gmailFromEmail', settings.gmailFromEmail || '');
+  setInputValue('gmailSenderName', settings.gmailSenderName || '');
+
+  if (!settings.openaiConfigured || !settings.gmailConfigured) {
+    openSettings();
+  }
+}
+
+function openSettings() {
+  if (settingsModal) settingsModal.hidden = false;
+}
+
+function closeSettings() {
+  if (settingsModal) settingsModal.hidden = true;
 }
 
 function renderDocumentRows(documents) {
@@ -301,6 +331,8 @@ function renderPersonaEvaluation(evaluation) {
       <dt>위험 분포</dt><dd>${escapeHtml(formatRiskDistribution(distribution))}</dd>
       <dt>관련 부서</dt><dd>${escapeHtml(formatList(evaluation.matchedDepartments))}</dd>
       <dt>관련 역할</dt><dd>${escapeHtml(formatList(evaluation.matchedRoles))}</dd>
+      <dt>평가 모드</dt><dd>${escapeHtml(evaluation.aiMode || 'rule-persona')}</dd>
+      <dt>오류</dt><dd>${escapeHtml(evaluation.errorMessage || '-')}</dd>
     </dl>
   `;
 }
@@ -558,6 +590,11 @@ function setText(id, value) {
   if (element) element.textContent = value;
 }
 
+function setInputValue(id, value) {
+  const element = document.getElementById(id);
+  if (element) element.value = value;
+}
+
 function escapeHtml(value) {
   return String(value)
     .replaceAll('&', '&amp;')
@@ -579,34 +616,51 @@ function cssEscape(value) {
   return String(value).replace(/["\\]/g, '\\$&');
 }
 
-if (loginForm) {
-  loginForm.addEventListener('submit', async (event) => {
-    event.preventDefault();
+if (documentList) {
+  loadSettings();
+  loadDocuments();
+}
 
-    const id = document.getElementById('userId').value;
-    const password = document.getElementById('password').value;
-
-    const response = await fetch('/api/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id, password })
-    });
-
-    if (!response.ok) {
-      loginMessage.textContent = 'ID 또는 PW가 올바르지 않습니다.';
-      return;
-    }
-
-    const user = await response.json();
-    localStorage.setItem('user', JSON.stringify(user));
-    window.location.href = '/dashboard.html';
+if (settingsButton) {
+  settingsButton.addEventListener('click', async () => {
+    await loadSettings();
+    openSettings();
   });
 }
 
-if (documentList) {
-  const user = localStorage.getItem('user');
-  if (!user) window.location.href = '/';
-  else loadDocuments();
+if (closeSettingsButton) {
+  closeSettingsButton.addEventListener('click', closeSettings);
+}
+
+if (settingsForm) {
+  settingsForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const formData = new FormData(settingsForm);
+    const payload = Object.fromEntries(formData.entries());
+    const response = await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      settingsMessage.textContent = '환경설정 저장에 실패했습니다.';
+      return;
+    }
+
+    settingsMessage.textContent = '환경설정을 저장했습니다. 다음 분석/메일부터 적용됩니다.';
+    setTimeout(closeSettings, 500);
+  });
+}
+
+if (shutdownButton) {
+  shutdownButton.addEventListener('click', async () => {
+    if (!confirm('공문관리 앱을 종료할까요?')) return;
+
+    await fetch('/api/shutdown', { method: 'POST' }).catch(() => {});
+    window.close();
+    document.body.innerHTML = '<main class="login-page"><section class="login-card"><h1>공문관리 앱 종료</h1><p>창을 닫아도 됩니다.</p></section></main>';
+  });
 }
 
 if (documentTypeSelect && outgoingFields) {
@@ -678,9 +732,3 @@ if (nextMonthButton) {
   });
 }
 
-if (logoutButton) {
-  logoutButton.addEventListener('click', () => {
-    localStorage.removeItem('user');
-    window.location.href = '/';
-  });
-}

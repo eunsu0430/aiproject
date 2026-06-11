@@ -7,6 +7,7 @@ require('dotenv').config();
 const { analyzeDocument, extractProductionDocumentInfo } = require('./server/services/documentAnalyzer');
 const { parseOfficialFile } = require('./server/services/kordocMcpClient');
 const { callEmailTool } = require('./server/services/emailMcpClient');
+const { getPublicRuntimeStatus, readRuntimeSettings, writeRuntimeSettings } = require('./server/services/runtimeConfig');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -43,8 +44,34 @@ const upload = multer({
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
+app.get('/', (req, res) => {
+  res.redirect('/dashboard.html');
+});
+
 app.get('/health', (req, res) => {
   res.json({ ok: true, service: 'official-document-manager' });
+});
+
+app.post('/api/shutdown', (req, res) => {
+  res.json({ ok: true });
+  setTimeout(() => process.exit(0), 250);
+});
+
+app.get('/api/settings', (req, res) => {
+  const settings = readRuntimeSettings();
+
+  res.json({
+    ...getPublicRuntimeStatus(),
+    openaiKey: settings.openaiKey || '',
+    gmailClientId: settings.gmailClientId || '',
+    gmailClientSecret: settings.gmailClientSecret || '',
+    gmailRefreshToken: settings.gmailRefreshToken || ''
+  });
+});
+
+app.post('/api/settings', (req, res) => {
+  writeRuntimeSettings(req.body || {});
+  res.json(getPublicRuntimeStatus());
 });
 
 app.get('/api/email/status', async (req, res) => {
@@ -164,6 +191,9 @@ app.post('/api/documents/:id/recipients/:recipientId/reminder', async (req, res)
       recipientName: recipient.name || document.department || '담당자',
       documentTitle: document.title || '공문',
       responseDueDate: document.responseDueDate || document.dueDate || document.deadline || '',
+      documentSummary: document.analysis && document.analysis.summary || summarizeForEmail(document.content || document.parsedContent || ''),
+      progressText: formatRecipientProgressText(document),
+      requiredAction: getReminderRequiredAction(document),
       senderName: req.body && req.body.senderName || '',
       customMessage: req.body && req.body.customMessage || ''
     });
@@ -328,7 +358,28 @@ function ensureDataFiles() {
   }
 
   readJsonArray(usersPath, defaultUsers(), true);
+  syncAdminUserFromEnv();
   readJsonArray(documentsPath, [], true);
+}
+
+function syncAdminUserFromEnv() {
+  const adminPassword = process.env.ADMIN_PASSWORD;
+
+  if (!adminPassword) return;
+
+  const adminId = process.env.ADMIN_ID || 'admin';
+  const adminName = process.env.ADMIN_NAME || '관리자';
+  const users = readJsonArray(usersPath, [], true);
+  const adminUser = users.find((user) => user.id === adminId);
+
+  if (adminUser) {
+    adminUser.password = adminPassword;
+    adminUser.name = adminUser.name || adminName;
+  } else {
+    users.push({ id: adminId, password: adminPassword, name: adminName });
+  }
+
+  writeJsonArray(usersPath, users);
 }
 
 function readDocuments() {
@@ -443,6 +494,32 @@ function buildOutgoingTrackingAnalysis(document, productionInfo = {}) {
   };
 }
 
+function formatRecipientProgressText(document) {
+  if (!document || document.documentType !== 'outgoing') {
+    return '';
+  }
+
+  const progress = getRecipientProgress(document.recipients);
+  return `전체 ${progress.total}곳 중 ${progress.received}곳 접수, ${progress.pending}곳 미수신`;
+}
+
+function getReminderRequiredAction(document) {
+  const dueDate = document && (document.responseDueDate || document.dueDate || document.deadline);
+  const dueText = dueDate ? `${dueDate}까지 자료 회신` : '요청 자료 회신';
+
+  return `${dueText} 부탁드립니다. 이미 제출하셨다면 회신 여부만 확인해 주세요.`;
+}
+
+function summarizeForEmail(value) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+
+  if (!text) {
+    return '';
+  }
+
+  return text.length > 220 ? `${text.slice(0, 220)}...` : text;
+}
+
 function extractRecipientsFromText(text, ownDepartment) {
   const source = String(text || '').replace(/\s+/g, ' ');
   const recipients = [];
@@ -512,27 +589,63 @@ function extractSenderFromText(text) {
 
 function extractDateFromText(text) {
   const source = String(text || '');
-  const dates = [];
-  const isoMatches = source.matchAll(/20\d{2}[-.\/]\s*\d{1,2}[-.\/]\s*\d{1,2}/g);
-  const koreanMatches = source.matchAll(/(20\d{2})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일/g);
-  const shortMatches = source.matchAll(/(?<!\d)(\d{1,2})\s*[.\/]\s*(\d{1,2})\s*[.\/]?/g);
+  const candidates = collectDateCandidatesFromText(source);
+
+  return candidates
+    .sort((a, b) => b.score - a.score || new Date(a.date) - new Date(b.date))[0]?.date || '';
+}
+
+function collectDateCandidatesFromText(source) {
+  const candidates = [];
   const firstYear = (source.match(/20\d{2}/) || [new Date().getFullYear()])[0];
+  const patterns = [
+    /20\d{2}[-.\/]\s*\d{1,2}[-.\/]\s*\d{1,2}/g,
+    /(20\d{2})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일/g,
+    /(?<!\d)(\d{1,2})\s*월\s*(\d{1,2})\s*일/g,
+    /(?<!\d)(\d{1,2})\s*[.\/]\s*(\d{1,2})\s*[.\/]?/g
+  ];
 
-  for (const match of isoMatches) {
-    dates.push(normalizeDateString(match[0]));
-  }
+  patterns.forEach((pattern, patternIndex) => {
+    for (const match of source.matchAll(pattern)) {
+      const date = patternIndex === 0
+        ? normalizeDateString(match[0])
+        : patternIndex === 1
+          ? `${match[1]}-${match[2].padStart(2, '0')}-${match[3].padStart(2, '0')}`
+          : `${firstYear}-${match[1].padStart(2, '0')}-${match[2].padStart(2, '0')}`;
 
-  for (const match of koreanMatches) {
-    dates.push(`${match[1]}-${match[2].padStart(2, '0')}-${match[3].padStart(2, '0')}`);
-  }
+      if (!Number.isNaN(new Date(date).getTime())) {
+        candidates.push({
+          date,
+          score: scoreDateCandidateFromText(source, match.index || 0, date)
+        });
+      }
+    }
+  });
 
-  for (const match of shortMatches) {
-    dates.push(`${firstYear}-${match[1].padStart(2, '0')}-${match[2].padStart(2, '0')}`);
-  }
+  return candidates;
+}
 
-  return dates
-    .filter((date) => !Number.isNaN(new Date(date).getTime()))
-    .sort((a, b) => new Date(b) - new Date(a))[0] || '';
+function scoreDateCandidateFromText(source, index, date) {
+  const before = source.slice(Math.max(0, index - 120), index);
+  const after = source.slice(index, Math.min(source.length, index + 140));
+  const context = `${before} ${after}`;
+  let score = 0;
+
+  if (/제출|회신|등록|신청|참여|진단|응답|납부|보고|검토|처리|취합|제출처/.test(context)) score += 6;
+  if (/기한|마감|까지|완료|기일|기간|제출일|회신일|신청일|등록일/.test(context)) score += 8;
+  if (/제출\s*기한|회신\s*기한|자료\s*제출|의견\s*제출|제출\s*바람|회신\s*바람|까지\s*(제출|회신|등록|신청)/.test(context)) score += 12;
+  if (/[~～-]\s*(?:20\d{2}[-.\/년\s]*)?\d{1,2}/.test(before) || /[~～-]/.test(before)) score += 5;
+  if (/시행일|접수일|작성일|발송일|문서번호|등록번호|접수번호|감사관-\d+/.test(context)) score -= 12;
+  else if (/시행|접수|작성|발송|관련|문서번호/.test(context)) score -= 5;
+  if (/전화|팩스|우편|주소|사업비|예산|금액|원\b/.test(context)) score -= 3;
+
+  const diffDays = getDueDateDiffDays(date);
+  if (diffDays < -365) score -= 4;
+  else if (diffDays < 0) score += 1;
+  else if (diffDays <= 30) score += 4;
+  else if (diffDays <= 120) score += 2;
+
+  return score;
 }
 
 function normalizeDateString(value) {

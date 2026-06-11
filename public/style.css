@@ -115,10 +115,68 @@ button:active {
   font-size: 22px;
 }
 
+.topbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .topbar button {
   width: auto;
   padding: 9px 14px;
   background: #374151;
+}
+
+.secondary-button {
+  color: #0f172a;
+  background: #e2e8f0;
+}
+
+.settings-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.58);
+}
+
+.settings-modal[hidden] {
+  display: none;
+}
+
+.settings-dialog {
+  width: min(720px, 100%);
+  max-height: 92vh;
+  overflow: auto;
+  padding: 24px;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.22);
+}
+
+.settings-note {
+  padding: 12px;
+  border: 1px solid #f59e0b;
+  border-radius: 8px;
+  color: #92400e;
+  background: #fffbeb;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.settings-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.settings-actions button {
+  flex: 1;
+  padding: 12px 16px;
 }
 
 .dashboard-shell {

@@ -32,6 +32,7 @@ temp/
 *.zip
 *.7z
 *.rar
+*.exe
 
 .omo/
 *.log

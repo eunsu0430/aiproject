@@ -9,7 +9,10 @@
 <body>
   <header class="topbar">
     <h1>공문 업무관리</h1>
-    <button id="logoutButton" type="button">로그아웃</button>
+    <div class="topbar-actions">
+      <button id="settingsButton" type="button">환경설정</button>
+      <button id="shutdownButton" type="button">앱 종료</button>
+    </div>
   </header>
 
   <main class="dashboard-shell">
@@ -124,6 +127,41 @@
       <p class="empty-detail">목록이나 캘린더에서 공문을 선택하면 분석 결과를 확인할 수 있습니다.</p>
     </section>
   </main>
+
+  <section id="settingsModal" class="settings-modal" hidden>
+    <div class="settings-dialog">
+      <h2>환경설정</h2>
+      <p class="settings-note">이 앱은 EXE 실행 후 내부 서버가 자동으로 구동됩니다. 아래 키는 이 PC의 로컬 data 폴더에만 저장됩니다.</p>
+      <form id="settingsForm">
+        <label for="openaiKey">OPENAI</label>
+        <input id="openaiKey" name="openaiKey" type="password" placeholder="sk-...">
+
+        <label for="openaiModel">OPENAI_MODEL</label>
+        <input id="openaiModel" name="openaiModel" type="text" value="gpt-4o-mini">
+
+        <label for="gmailClientId">GMAIL_CLIENT_ID</label>
+        <input id="gmailClientId" name="gmailClientId" type="password">
+
+        <label for="gmailClientSecret">GMAIL_CLIENT_SECRET</label>
+        <input id="gmailClientSecret" name="gmailClientSecret" type="password">
+
+        <label for="gmailRefreshToken">GMAIL_REFRESH_TOKEN</label>
+        <input id="gmailRefreshToken" name="gmailRefreshToken" type="password">
+
+        <label for="gmailFromEmail">GMAIL_FROM_EMAIL</label>
+        <input id="gmailFromEmail" name="gmailFromEmail" type="email" placeholder="me@gmail.com">
+
+        <label for="gmailSenderName">보내는 사람 이름</label>
+        <input id="gmailSenderName" name="gmailSenderName" type="text" placeholder="담당자">
+
+        <div class="settings-actions">
+          <button type="submit">저장</button>
+          <button id="closeSettingsButton" class="secondary-button" type="button">닫기</button>
+        </div>
+        <p id="settingsMessage" class="message"></p>
+      </form>
+    </div>
+  </section>
 
   <script src="/app.js"></script>
 </body>
