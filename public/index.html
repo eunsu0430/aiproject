@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>공문 업무관리 로그인</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="login-page">
+    <section class="login-card">
+      <h1>공문 업무관리</h1>
+      <p>관리자 계정으로 로그인하세요.</p>
+      <form id="loginForm">
+        <label for="userId">ID</label>
+        <input id="userId" name="userId" type="text" autocomplete="username" required>
+
+        <label for="password">PW</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+
+        <button type="submit">로그인</button>
+        <p id="loginMessage" class="message"></p>
+      </form>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

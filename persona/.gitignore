@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.py[cod]
+.cache/
+data/*.json
+datasets/
+*.parquet
+*.duckdb
+*.db
+.DS_Store
+/tmp/

@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>공문 업무관리 대시보드</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>공문 업무관리</h1>
+    <button id="logoutButton" type="button">로그아웃</button>
+  </header>
+
+  <main class="dashboard-shell">
+    <aside class="left-rail">
+      <section class="summary-grid">
+        <article class="summary-card">
+          <span>전체 공문</span>
+          <strong id="totalCount">0</strong>
+        </article>
+        <article class="summary-card">
+          <span>3일 이내</span>
+          <strong id="urgentDueCount">0</strong>
+        </article>
+        <article class="summary-card">
+          <span>기한 초과</span>
+          <strong id="overdueCount">0</strong>
+        </article>
+        <article class="summary-card">
+          <span>긴급</span>
+          <strong id="emergencyCount">0</strong>
+        </article>
+      </section>
+
+      <section id="deadlineAlert" class="deadline-alert" hidden></section>
+
+      <section class="panel upload-panel">
+        <h2>공문 등록</h2>
+        <form id="uploadForm" class="document-form" enctype="multipart/form-data">
+          <label for="officialFile">공문 파일</label>
+          <input id="officialFile" name="officialFile" type="file" accept=".pdf,.hwp,.hwpx,.hwpml,.docx,.xls,.xlsx" required>
+
+          <label for="uploadDepartment">담당부서</label>
+          <input id="uploadDepartment" name="department" type="text" placeholder="예: 기획팀">
+
+          <label for="uploadDueDate">제출기한</label>
+          <input id="uploadDueDate" name="dueDate" type="date">
+
+          <label for="uploadNote">비고</label>
+          <textarea id="uploadNote" name="note" rows="3"></textarea>
+
+          <button type="submit">등록</button>
+          <p id="uploadMessage" class="message"></p>
+        </form>
+      </section>
+    </aside>
+
+    <section class="calendar-panel">
+      <div class="calendar-header">
+        <button id="prevMonthButton" type="button" aria-label="이전 달">‹</button>
+        <h2 id="calendarTitle">마감 캘린더</h2>
+        <button id="nextMonthButton" type="button" aria-label="다음 달">›</button>
+      </div>
+      <div class="calendar-weekdays">
+        <span>일</span>
+        <span>월</span>
+        <span>화</span>
+        <span>수</span>
+        <span>목</span>
+        <span>금</span>
+        <span>토</span>
+      </div>
+      <div id="calendar" class="month-calendar"></div>
+    </section>
+
+    <section class="panel document-list-panel">
+      <h2>공문 목록</h2>
+      <div class="table-wrap">
+        <table class="document-table">
+          <thead>
+            <tr>
+              <th>제목</th>
+              <th>발신기관</th>
+              <th>담당부서</th>
+              <th>제출기한</th>
+              <th>상태</th>
+              <th>중요도</th>
+              <th>등록일</th>
+              <th>관리</th>
+            </tr>
+          </thead>
+          <tbody id="documentList"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="documentDetail" class="panel detail-panel">
+      <h2>공문 상세</h2>
+      <p class="empty-detail">목록이나 캘린더에서 공문을 선택하면 분석 결과를 확인할 수 있습니다.</p>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
