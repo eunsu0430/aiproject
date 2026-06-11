@@ -1,6 +1,6 @@
 # Official Document Manager
 
-Node.js 기반 공문 관리 웹 애플리케이션입니다. 공문 등록, 마감 일정 관리, 접수/생산 공문 구분, 수신부서 취합 현황 관리, Gmail 독촉 메일 초안 저장/발송을 지원합니다.
+공문 등록, 마감 일정 관리, 접수/생산 공문 구분, 수신부서 취합 현황 관리, Gmail 독촉 메일 초안 저장/발송을 지원하는 Node.js 웹 애플리케이션입니다.
 
 ## 설치
 
@@ -18,7 +18,7 @@ OPENAI_MODEL=gpt-4o-mini
 
 ADMIN_ID=admin
 ADMIN_PASSWORD=
-ADMIN_NAME=Admin
+ADMIN_NAME=관리자
 
 GMAIL_CLIENT_ID=
 GMAIL_CLIENT_SECRET=
@@ -33,7 +33,7 @@ GMAIL_SENDER_NAME=
 npm start
 ```
 
-접속 주소:
+웹 접속 주소:
 
 ```text
 http://localhost:3000

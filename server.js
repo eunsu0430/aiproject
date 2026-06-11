@@ -4,8 +4,9 @@ const path = require('path');
 const multer = require('multer');
 require('dotenv').config();
 
-const { analyzeDocument } = require('./server/services/documentAnalyzer');
+const { analyzeDocument, extractProductionDocumentInfo } = require('./server/services/documentAnalyzer');
 const { parseOfficialFile } = require('./server/services/kordocMcpClient');
+const { callEmailTool } = require('./server/services/emailMcpClient');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -44,6 +45,19 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('/health', (req, res) => {
   res.json({ ok: true, service: 'official-document-manager' });
+});
+
+app.get('/api/email/status', async (req, res) => {
+  try {
+    const status = await callEmailTool('get_gmail_status', {});
+    return res.json(status);
+  } catch (error) {
+    return res.status(500).json({
+      configured: false,
+      message: 'Gmail MCP 상태 확인에 실패했습니다.',
+      detail: error.message
+    });
+  }
 });
 
 app.post('/api/login', (req, res) => {
@@ -90,6 +104,94 @@ app.patch('/api/documents/:id/status', (req, res) => {
   return res.json(document);
 });
 
+app.patch('/api/documents/:id/recipients/:recipientId', (req, res) => {
+  const documents = readDocuments();
+  const document = documents.find((item) => String(item.id) === String(req.params.id));
+
+  if (!document) {
+    return res.status(404).json({ message: 'Document not found.' });
+  }
+
+  const recipient = Array.isArray(document.recipients)
+    ? document.recipients.find((item) => String(item.id) === String(req.params.recipientId))
+    : null;
+
+  if (!recipient) {
+    return res.status(404).json({ message: 'Recipient not found.' });
+  }
+
+  recipient.status = req.body && req.body.status === 'received' ? 'received' : 'pending';
+  recipient.note = req.body && typeof req.body.note === 'string' ? req.body.note : recipient.note || '';
+  recipient.receivedAt = recipient.status === 'received' ? new Date().toISOString() : null;
+  document.recipientProgress = getRecipientProgress(document.recipients);
+
+  if (document.documentType === 'outgoing' && document.recipientProgress.total > 0) {
+    document.status = document.recipientProgress.pending === 0 ? '완료' : '진행중';
+    document.completedAt = document.recipientProgress.pending === 0 ? new Date().toISOString() : null;
+  }
+
+  writeJsonArray(documentsPath, documents);
+  return res.json(document);
+});
+
+app.post('/api/documents/:id/recipients/:recipientId/reminder', async (req, res) => {
+  try {
+    const documents = readDocuments();
+    const document = documents.find((item) => String(item.id) === String(req.params.id));
+
+    if (!document) {
+      return res.status(404).json({ message: 'Document not found.' });
+    }
+
+    const recipient = Array.isArray(document.recipients)
+      ? document.recipients.find((item) => String(item.id) === String(req.params.recipientId))
+      : null;
+
+    if (!recipient) {
+      return res.status(404).json({ message: 'Recipient not found.' });
+    }
+
+    const email = String(req.body && req.body.email || recipient.email || '').trim();
+    const action = req.body && req.body.action === 'send' ? 'send' : 'draft';
+
+    if (!email) {
+      return res.status(400).json({ message: '담당자 이메일을 입력해 주세요.' });
+    }
+
+    const toolName = action === 'send' ? 'send_reminder_email' : 'create_reminder_draft';
+    const result = await callEmailTool(toolName, {
+      to: email,
+      recipientName: recipient.name || document.department || '담당자',
+      documentTitle: document.title || '공문',
+      responseDueDate: document.responseDueDate || document.dueDate || document.deadline || '',
+      senderName: req.body && req.body.senderName || '',
+      customMessage: req.body && req.body.customMessage || ''
+    });
+
+    recipient.email = email;
+    recipient.reminderStatus = action === 'send' ? 'sent' : 'drafted';
+    recipient.lastReminderAt = new Date().toISOString();
+    recipient.reminderHistory = Array.isArray(recipient.reminderHistory) ? recipient.reminderHistory : [];
+    recipient.reminderHistory.push({
+      action,
+      email,
+      at: recipient.lastReminderAt,
+      subject: result.subject || '',
+      draftId: result.draftId || '',
+      messageId: result.messageId || ''
+    });
+
+    writeJsonArray(documentsPath, documents);
+    return res.json({ document, recipient, emailResult: result });
+  } catch (error) {
+    console.error('[gmail:reminder]', error);
+    return res.status(500).json({
+      message: 'Gmail 독촉 메일 처리에 실패했습니다.',
+      detail: error.message
+    });
+  }
+});
+
 app.post('/api/documents/upload', upload.single('officialFile'), async (req, res) => {
   try {
     if (!req.file) {
@@ -116,6 +218,9 @@ app.post('/api/documents/upload', upload.single('officialFile'), async (req, res
       content: parsedText,
       dueDate: req.body.dueDate || '',
       dueDateSource: req.body.dueDate ? 'user' : 'auto',
+      documentType: getDocumentTypeFromBody(req.body),
+      recipients: req.body.recipients || '',
+      responseDueDate: req.body.responseDueDate || req.body.dueDate || '',
       department: (parsed.metadata && parsed.metadata.department) || req.body.department || '',
       note: req.body.note || '',
       fileInfo: {
@@ -157,13 +262,19 @@ app.delete('/api/documents/:id', (req, res) => {
 
 async function buildDocument(body, documents) {
   const userProvidedDueDate = body.dueDateSource === 'user';
+  const documentType = getDocumentTypeFromBody(body);
+  const recipients = documentType === 'outgoing' ? normalizeRecipients(body.recipients) : [];
   const document = {
     id: getNextId(documents),
+    documentType,
     title: body.title || '제목 없음',
     sender: body.sender || '',
     content: body.content || '',
     dueDate: body.dueDate || body.deadline || '',
+    responseDueDate: body.responseDueDate || body.dueDate || body.deadline || '',
     department: body.department || '',
+    recipients,
+    recipientProgress: getRecipientProgress(recipients),
     note: body.note || '',
     status: '진행중',
     createdAt: new Date().toISOString()
@@ -175,6 +286,24 @@ async function buildDocument(body, documents) {
 
   if (body.parsedContent) {
     document.parsedContent = body.parsedContent;
+  }
+
+  if (document.documentType === 'outgoing') {
+    const productionInfo = await extractProductionDocumentInfo(document);
+
+    if (productionInfo.recipients.length > 0) {
+      document.recipients = normalizeRecipients(productionInfo.recipients);
+      document.recipientProgress = getRecipientProgress(document.recipients);
+    } else if (document.recipients.length === 0) {
+      document.recipients = normalizeRecipients(extractRecipientsFromText(document.content, document.department));
+      document.recipientProgress = getRecipientProgress(document.recipients);
+    }
+
+    document.responseDueDate = productionInfo.responseDueDate || document.responseDueDate || document.dueDate || document.deadline || '';
+    document.dueDate = document.dueDate || document.responseDueDate || '';
+    document.deadline = document.responseDueDate || document.dueDate || '';
+    document.analysis = buildOutgoingTrackingAnalysis(document, productionInfo);
+    return document;
   }
 
   document.analysis = await analyzeDocument(document);
@@ -238,6 +367,104 @@ function getNextId(documents) {
 
 function normalizeStatus(status) {
   return status === '완료' ? '완료' : '진행중';
+}
+
+function getDocumentTypeFromBody(body) {
+  const rawType = String(body && body.documentType || '').trim().toLowerCase();
+
+  if (['outgoing', 'production', 'produced'].includes(rawType)) {
+    return 'outgoing';
+  }
+
+  if (/생산|취합|발송|수신/.test(rawType)) {
+    return 'outgoing';
+  }
+
+  if (body && (String(body.recipients || '').trim() || String(body.responseDueDate || '').trim())) {
+    return 'outgoing';
+  }
+
+  return 'incoming';
+}
+
+function normalizeRecipients(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map((item, index) => normalizeRecipientItem(item, index))
+      .filter(Boolean);
+  }
+
+  return String(value || '')
+    .split(/[\n,;]+/)
+    .map((name, index) => normalizeRecipientItem(name, index))
+    .filter(Boolean);
+}
+
+function normalizeRecipientItem(value, index) {
+  const source = value && typeof value === 'object' ? value : { name: value };
+  const name = String(source.name || source.department || '').trim();
+
+  if (!name) {
+    return null;
+  }
+
+  return {
+    id: String(source.id || `recipient-${index + 1}-${sanitizeFileName(name).slice(0, 24)}`),
+    name,
+    status: source.status === 'received' ? 'received' : 'pending',
+    receivedAt: source.receivedAt || null,
+    note: source.note || ''
+  };
+}
+
+function getRecipientProgress(recipients) {
+  const items = Array.isArray(recipients) ? recipients : [];
+  const received = items.filter((item) => item.status === 'received').length;
+
+  return {
+    total: items.length,
+    received,
+    pending: Math.max(items.length - received, 0)
+  };
+}
+
+function buildOutgoingTrackingAnalysis(document, productionInfo = {}) {
+  const progress = getRecipientProgress(document.recipients);
+
+  return {
+    summary: productionInfo.summary || `생산 공문 취합 대상 ${progress.total}곳 중 ${progress.received}곳 접수, ${progress.pending}곳 미수신`,
+    deadline: document.responseDueDate || document.dueDate || '',
+    departments: document.recipients.map((recipient) => recipient.name),
+    requiredActions: progress.pending > 0 ? ['수신부서 회신 확인', '미수신 부서 독촉'] : ['취합 완료'],
+    importance: '',
+    importanceReason: ['생산 공문은 AI/페르소나 평가 없이 수신부서 취합 현황만 관리합니다.'],
+    aiMode: productionInfo.aiMode || 'tracking-only',
+    extractionError: productionInfo.errorMessage || ''
+  };
+}
+
+function extractRecipientsFromText(text, ownDepartment) {
+  const source = String(text || '').replace(/\s+/g, ' ');
+  const recipients = [];
+  const patterns = [
+    /수신\s*[:：]?\s*([^ 참조 경유 제목 시행 접수]+(?:\s+[^ 참조 경유 제목 시행 접수]+){0,20})/,
+    /수신자\s*[:：]?\s*([^ 참조 경유 제목 시행 접수]+(?:\s+[^ 참조 경유 제목 시행 접수]+){0,20})/
+  ];
+
+  patterns.forEach((pattern) => {
+    const match = source.match(pattern);
+    if (match && match[1]) {
+      match[1]
+        .split(/[,，ㆍ·;、]|\s{2,}/)
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .forEach((item) => recipients.push(item));
+    }
+  });
+
+  return Array.from(new Set(recipients))
+    .filter((item) => item !== ownDepartment)
+    .slice(0, 50);
 }
 
 function defaultUsers() {

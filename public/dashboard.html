@@ -31,6 +31,14 @@
           <span>긴급</span>
           <strong id="emergencyCount">0</strong>
         </article>
+        <article class="summary-card">
+          <span>내가 낼 공문</span>
+          <strong id="incomingOpenCount">0</strong>
+        </article>
+        <article class="summary-card">
+          <span>취합 대기</span>
+          <strong id="outgoingPendingCount">0</strong>
+        </article>
       </section>
 
       <section id="deadlineAlert" class="deadline-alert" hidden></section>
@@ -38,6 +46,12 @@
       <section class="panel upload-panel">
         <h2>공문 등록</h2>
         <form id="uploadForm" class="document-form" enctype="multipart/form-data">
+          <label for="documentType">업무 구분</label>
+          <select id="documentType" name="documentType">
+            <option value="incoming">접수 공문: 내가 처리/제출</option>
+            <option value="outgoing">생산 공문: 타부서 자료 취합</option>
+          </select>
+
           <label for="officialFile">공문 파일</label>
           <input id="officialFile" name="officialFile" type="file" accept=".pdf,.hwp,.hwpx,.hwpml,.docx,.xls,.xlsx" required>
 
@@ -46,6 +60,14 @@
 
           <label for="uploadDueDate">제출기한</label>
           <input id="uploadDueDate" name="dueDate" type="date">
+
+          <div id="outgoingFields" class="outgoing-fields" hidden>
+            <label for="responseDueDate">수신부서 회신기한</label>
+            <input id="responseDueDate" name="responseDueDate" type="date">
+
+            <label for="recipients">수신부서</label>
+            <textarea id="recipients" name="recipients" rows="5" placeholder="부서명을 줄바꿈 또는 쉼표로 입력"></textarea>
+          </div>
 
           <label for="uploadNote">비고</label>
           <textarea id="uploadNote" name="note" rows="3"></textarea>
@@ -81,9 +103,11 @@
           <thead>
             <tr>
               <th>제목</th>
+              <th>구분</th>
               <th>발신기관</th>
               <th>담당부서</th>
               <th>제출기한</th>
+              <th>취합현황</th>
               <th>상태</th>
               <th>중요도</th>
               <th>등록일</th>

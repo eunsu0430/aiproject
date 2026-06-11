@@ -6,7 +6,6 @@ node_modules/
 
 data/*
 !data/.gitkeep
-**/data/*.json
 upload/*
 !upload/.gitkeep
 uploads/*
@@ -35,7 +34,6 @@ temp/
 *.rar
 
 .omo/
-**/_workspace/
 *.log
 
 credentials.json

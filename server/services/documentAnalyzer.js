@@ -33,6 +33,154 @@ async function analyzeDocument(document) {
   };
 }
 
+async function extractProductionDocumentInfo(document) {
+  const fallback = buildProductionInfoFallback(document, 'rule-fallback-no-key');
+  const apiKey = process.env.OPENAI || process.env.OPENAI_API_KEY;
+
+  if (!apiKey) {
+    return fallback;
+  }
+
+  try {
+    const client = new OpenAI({ apiKey });
+    const response = await client.chat.completions.create({
+      model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+      temperature: 0,
+      messages: [
+        {
+          role: 'system',
+          content: [
+            '너는 한국 공문에서 생산 문서의 취합 정보를 추출하는 도우미다.',
+            '위험도, 중요도, 페르소나 평가는 하지 않는다.',
+            '수신자/수신부서, 회신기한, 짧은 취합 목적만 추출한다.',
+            '수신자에는 결재자, 담당자, 시행기관, 주소, 전화번호, 이메일, 문서번호, 제목, 경유/참조 라벨을 넣지 않는다.',
+            '반드시 JSON만 반환한다.',
+            'JSON 필드는 recipients(array of strings), responseDueDate(YYYY-MM-DD or empty string), summary(string) 이다.'
+          ].join('\n')
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            title: document.title,
+            department: document.department,
+            dueDate: document.dueDate || document.deadline,
+            content: String(document.content || document.parsedContent || '').slice(0, 12000)
+          })
+        }
+      ],
+      response_format: { type: 'json_object' }
+    });
+    const parsed = JSON.parse(response.choices[0].message.content);
+
+    return normalizeProductionInfo(parsed, fallback, 'openai-production-extract');
+  } catch (error) {
+    return {
+      ...fallback,
+      aiMode: 'rule-fallback-production-extract-error',
+      errorMessage: error.message
+    };
+  }
+}
+
+function normalizeProductionInfo(value, fallback, aiMode) {
+  const source = value && typeof value === 'object' ? value : {};
+  const recipients = normalizeProductionRecipients(source.recipients);
+  const responseDueDate = normalizeDateLike(source.responseDueDate);
+
+  return {
+    recipients: recipients.length > 0 ? recipients : fallback.recipients,
+    responseDueDate: responseDueDate || fallback.responseDueDate,
+    summary: String(source.summary || fallback.summary || '').trim(),
+    aiMode
+  };
+}
+
+function buildProductionInfoFallback(document, aiMode) {
+  const content = String(document.content || document.parsedContent || '');
+  const recipients = normalizeProductionRecipients(extractRecipientCandidates(content, document.department));
+  const responseDueDate = normalizeDateLike(document.responseDueDate || document.dueDate || document.deadline || extractDeadline(content));
+
+  return {
+    recipients,
+    responseDueDate,
+    summary: recipients.length > 0
+      ? `생산 공문 수신 대상 ${recipients.length}곳의 회신을 취합합니다.`
+      : '생산 공문 수신부서 회신을 취합합니다.',
+    aiMode
+  };
+}
+
+function normalizeProductionRecipients(value) {
+  const items = Array.isArray(value) ? value : String(value || '').split(/[\n,;，ㆍ·、]+/);
+  const blocked = /^(수신|수신자|참조|경유|제목|시행|접수|결재|협조자|전화|전송|주소|우|공개|끝|담당|주무관|과장|국장|기관장)$/;
+  const result = [];
+
+  items
+    .map((item) => String(item || '').replace(/\s+/g, ' ').trim())
+    .map((item) => item.replace(/^(수신자?|참조|경유)\s*[:：]?\s*/, '').trim())
+    .map((item) => item.replace(/\s+(제목|시행|접수|결재|협조자|전화|전송|주소|우|공개|끝)\b.*$/, '').trim())
+    .map((item) => item.replace(/\s*\(.*?참조.*?\)\s*/g, '').trim())
+    .filter((item) => item.length >= 2 && item.length <= 60)
+    .filter((item) => !blocked.test(item))
+    .filter((item) => !/^\d+$/.test(item))
+    .filter((item) => !/[0-9]{2,4}-[0-9]{3,4}-[0-9]{4}/.test(item))
+    .filter((item) => !/@/.test(item))
+    .filter((item) => !/^https?:\/\//i.test(item))
+    .forEach((item) => {
+      if (!result.includes(item)) {
+        result.push(item);
+      }
+    });
+
+  return result.slice(0, 80);
+}
+
+function extractRecipientCandidates(content, ownDepartment) {
+  const source = String(content || '');
+  const compact = source.replace(/\s+/g, ' ');
+  const candidates = [];
+  const receiveBlock = compact.match(/수신자?\s*[:：]?\s*(.+?)(?:\s+\(?경유\)?|\s+제목\s+|\s+1\.|\s+시행\s+|\s+접수\s+|$)/);
+
+  if (receiveBlock && receiveBlock[1]) {
+    receiveBlock[1]
+      .split(/[,，ㆍ·;、]|\s{2,}/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .forEach((item) => candidates.push(item));
+  }
+
+  if (candidates.length > 0) {
+    return candidates.filter((item) => item !== ownDepartment);
+  }
+
+  Array.from(source.matchAll(/(?:본청|직속기관|교육지원청|공립|사립|초|중|고|특수|학교|부서|과|팀|센터|기관|원|청|장)[가-힣A-Za-z0-9·ㆍ\-\s()]{0,30}/g))
+    .map((match) => match[0].trim())
+    .filter(Boolean)
+    .forEach((item) => candidates.push(item));
+
+  return candidates.filter((item) => item !== ownDepartment);
+}
+
+function normalizeDateLike(value) {
+  const text = String(value || '').trim();
+
+  if (!text) {
+    return '';
+  }
+
+  const iso = text.match(/20\d{2}[-.\/]\s*\d{1,2}[-.\/]\s*\d{1,2}/);
+  if (iso) {
+    return normalizeDateString(iso[0]);
+  }
+
+  const korean = text.match(/(20\d{2})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일?/);
+  if (korean) {
+    return `${korean[1]}-${korean[2].padStart(2, '0')}-${korean[3].padStart(2, '0')}`;
+  }
+
+  return '';
+}
+
 async function evaluateWithOpenAI(document, context, fallbackRisk) {
   const apiKey = process.env.OPENAI || process.env.OPENAI_API_KEY;
 
@@ -499,5 +647,6 @@ function getDueDateDiffDays(dueDate) {
 }
 
 module.exports = {
-  analyzeDocument
+  analyzeDocument,
+  extractProductionDocumentInfo
 };

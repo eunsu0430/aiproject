@@ -5,8 +5,9 @@
 body {
   margin: 0;
   font-family: Arial, sans-serif;
-  color: #1f2937;
-  background: #eef2f7;
+  color: #172033;
+  background:
+    linear-gradient(180deg, #f7f9fc 0%, #edf2f7 320px, #eef2f7 100%);
 }
 
 h1,
@@ -18,6 +19,7 @@ p {
 
 button,
 input,
+select,
 textarea {
   font: inherit;
 }
@@ -34,9 +36,9 @@ textarea {
 .panel,
 .calendar-panel {
   background: #ffffff;
-  border: 1px solid #e5e7eb;
+  border: 1px solid rgba(148, 163, 184, 0.28);
   border-radius: 8px;
-  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+  box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
 }
 
 .login-card {
@@ -52,12 +54,23 @@ label {
 }
 
 input,
+select,
 textarea {
   width: 100%;
   padding: 11px 12px;
-  border: 1px solid #d1d5db;
+  border: 1px solid #cbd5e1;
   border-radius: 8px;
+  background: #fbfdff;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  border-color: #2563eb;
   background: #ffffff;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
 }
 
 textarea {
@@ -71,10 +84,18 @@ button {
   background: #2563eb;
   font-weight: 700;
   cursor: pointer;
+  transition: transform 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
 }
 
 button:hover {
   background: #1d4ed8;
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.18);
+  transform: translateY(-1px);
+}
+
+button:active {
+  transform: translateY(0);
+  box-shadow: none;
 }
 
 .topbar {
@@ -84,7 +105,9 @@ button:hover {
   gap: 16px;
   padding: 18px 28px;
   color: #ffffff;
-  background: #111827;
+  background: #101827;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.18);
 }
 
 .topbar h1 {
@@ -124,9 +147,10 @@ button:hover {
 
 .summary-card {
   padding: 16px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid rgba(148, 163, 184, 0.24);
   border-radius: 8px;
   background: #ffffff;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
 }
 
 .summary-card span {
@@ -139,6 +163,7 @@ button:hover {
   display: block;
   margin-top: 6px;
   font-size: 26px;
+  color: #0f172a;
 }
 
 .deadline-alert {
@@ -215,8 +240,8 @@ button:hover {
 .calendar-header button {
   height: 40px;
   padding: 0;
-  color: #1f2937;
-  background: #e5e7eb;
+  color: #0f172a;
+  background: #eef2f7;
   font-size: 28px;
   line-height: 1;
 }
@@ -245,14 +270,18 @@ button:hover {
   align-content: start;
   min-height: 92px;
   padding: 9px;
-  border: 1px solid #e5e7eb;
-  color: #1f2937;
+  border: 1px solid #e2e8f0;
+  color: #172033;
   background: #ffffff;
   text-align: left;
+  box-shadow: none;
 }
 
 .calendar-day:hover {
   background: #eff6ff;
+  border-color: #93c5fd;
+  box-shadow: none;
+  transform: none;
 }
 
 .calendar-day.is-other-month {
@@ -298,6 +327,16 @@ button:hover {
   white-space: nowrap;
 }
 
+.day-items span.day-item-incoming {
+  border-left: 3px solid #2563eb;
+  background: rgba(37, 99, 235, 0.12);
+}
+
+.day-items span.day-item-outgoing {
+  border-left: 3px solid #0f766e;
+  background: rgba(15, 118, 110, 0.14);
+}
+
 .document-list-panel {
   grid-area: list;
 }
@@ -313,28 +352,42 @@ button:hover {
 
 .document-table {
   width: 100%;
-  min-width: 900px;
-  border-collapse: collapse;
+  min-width: 1060px;
+  border-collapse: separate;
+  border-spacing: 0;
 }
 
 .document-table th,
 .document-table td {
-  padding: 11px;
+  padding: 12px 11px;
   border-bottom: 1px solid #e5e7eb;
   text-align: left;
   vertical-align: top;
 }
 
 .document-table th {
-  background: #f9fafb;
+  color: #475569;
+  background: #f8fafc;
+  font-size: 13px;
+  font-weight: 800;
 }
 
 .document-table tbody tr {
   cursor: pointer;
+  transition: background 0.16s ease, box-shadow 0.16s ease;
 }
 
 .document-table tbody tr:hover td {
   background: #eff6ff;
+}
+
+.document-table tbody tr.is-selected td {
+  background: #eaf2ff;
+  box-shadow: inset 0 1px 0 #bfdbfe, inset 0 -1px 0 #bfdbfe;
+}
+
+.document-table tbody tr.is-selected td:first-child {
+  box-shadow: inset 4px 0 0 #2563eb, inset 0 1px 0 #bfdbfe, inset 0 -1px 0 #bfdbfe;
 }
 
 .document-table tr.is-urgent td {
@@ -349,6 +402,14 @@ button:hover {
 
 .document-table tr.is-emergency td {
   border-left: 4px solid #dc2626;
+}
+
+.document-table tr.type-outgoing-row td:first-child {
+  box-shadow: inset 3px 0 0 #0f766e;
+}
+
+.document-table tr.type-outgoing-row.is-selected td:first-child {
+  box-shadow: inset 4px 0 0 #0f766e, inset 0 1px 0 #99f6e4, inset 0 -1px 0 #99f6e4;
 }
 
 .importance-badge {
@@ -381,12 +442,36 @@ button:hover {
   background: #fee2e2;
 }
 
+.type-badge {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.type-incoming {
+  color: #1d4ed8;
+  background: #dbeafe;
+}
+
+.type-outgoing {
+  color: #0f766e;
+  background: #ccfbf1;
+}
+
 .delete-button,
-.complete-button {
+.complete-button,
+.received-button,
+.pending-button,
+.draft-button,
+.send-button {
   width: auto;
   margin: 0 4px 4px 0;
-  padding: 7px 10px;
+  padding: 7px 11px;
   font-size: 13px;
+  box-shadow: none;
 }
 
 .delete-button {
@@ -394,9 +479,59 @@ button:hover {
   background: #fee2e2;
 }
 
+.delete-button:hover {
+  color: #7f1d1d;
+  background: #fecaca;
+}
+
 .complete-button {
   color: #166534;
   background: #dcfce7;
+}
+
+.complete-button:hover {
+  color: #14532d;
+  background: #bbf7d0;
+}
+
+.received-button {
+  color: #115e59;
+  background: #ccfbf1;
+}
+
+.received-button:hover {
+  color: #134e4a;
+  background: #99f6e4;
+}
+
+.pending-button {
+  color: #92400e;
+  background: #fef3c7;
+}
+
+.pending-button:hover {
+  color: #78350f;
+  background: #fde68a;
+}
+
+.draft-button {
+  color: #1d4ed8;
+  background: #dbeafe;
+}
+
+.draft-button:hover {
+  color: #1e40af;
+  background: #bfdbfe;
+}
+
+.send-button {
+  color: #991b1b;
+  background: #fee2e2;
+}
+
+.send-button:hover {
+  color: #7f1d1d;
+  background: #fecaca;
 }
 
 .empty-detail {
@@ -408,6 +543,7 @@ button:hover {
   grid-template-columns: 120px 1fr;
   gap: 10px 16px;
   margin: 0 0 22px;
+  padding-top: 4px;
 }
 
 .detail-list dt {
@@ -435,9 +571,9 @@ button:hover {
 .persona-evaluation div,
 .persona-panel-item {
   padding: 14px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid #e2e8f0;
   border-radius: 8px;
-  background: #f9fafb;
+  background: #f8fafc;
 }
 
 .persona-evaluation span {
@@ -455,6 +591,76 @@ button:hover {
 .persona-panel-list {
   display: grid;
   gap: 12px;
+}
+
+.recipient-section {
+  margin-bottom: 22px;
+}
+
+.recipient-summary {
+  margin-bottom: 10px;
+  color: #0f766e;
+  font-weight: 700;
+}
+
+.recipient-list {
+  display: grid;
+  gap: 8px;
+}
+
+.recipient-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.recipient-item strong,
+.recipient-item span {
+  display: block;
+}
+
+.recipient-item span {
+  margin-top: 3px;
+  color: #6b7280;
+  font-size: 13px;
+}
+
+.recipient-item p {
+  margin: 6px 0 0;
+  color: #4b5563;
+  font-size: 13px;
+}
+
+.recipient-email-label {
+  max-width: 360px;
+  margin: 10px 0 8px;
+}
+
+.recipient-email-label span {
+  margin-bottom: 4px;
+}
+
+.recipient-email-label input {
+  padding: 8px 10px;
+}
+
+.recipient-reminder-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.recipient-item.is-received {
+  border-left: 4px solid #0f766e;
+}
+
+.recipient-item.is-pending {
+  border-left: 4px solid #f59e0b;
 }
 
 .persona-panel-item header {
