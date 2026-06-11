@@ -5,7 +5,7 @@ const multer = require('multer');
 require('dotenv').config();
 
 const { analyzeDocument, extractProductionDocumentInfo } = require('./server/services/documentAnalyzer');
-const { parseOfficialFile } = require('./server/services/kordocMcpClient');
+const { parseOfficialFile, startKordocWorkerServer } = require('./server/services/kordocMcpClient');
 const { callEmailTool } = require('./server/services/emailMcpClient');
 const { getPublicRuntimeStatus, readRuntimeSettings, writeRuntimeSettings } = require('./server/services/runtimeConfig');
 const { dataDir, publicDir, uploadDir } = require('./server/services/appPaths');
@@ -18,6 +18,9 @@ const uploadTempDir = path.join(uploadDir, 'tmp');
 const allowedUploadExtensions = new Set(['.pdf', '.hwp', '.hwpx', '.hwpml', '.docx', '.xls', '.xlsx']);
 
 ensureDataFiles();
+startKordocWorkerServer().catch((error) => {
+  console.warn('[kordoc-worker]', error.message);
+});
 
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });

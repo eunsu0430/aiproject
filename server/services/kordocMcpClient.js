@@ -1,13 +1,80 @@
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const fs = require('fs');
+const http = require('http');
 const path = require('path');
 const { appRoot } = require('./appPaths');
 
 const execFileAsync = promisify(execFile);
 const projectRoot = appRoot;
+let workerServer = null;
+let workerUrl = '';
+let workerStartPromise = null;
+
+function startKordocWorkerServer() {
+  if (workerUrl) {
+    return Promise.resolve(workerUrl);
+  }
+
+  if (workerStartPromise) {
+    return workerStartPromise;
+  }
+
+  workerServer = http.createServer(async (req, res) => {
+    if (req.method !== 'POST' || req.url !== '/parse') {
+      res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: 'Not found' }));
+      return;
+    }
+
+    try {
+      const body = await readRequestBody(req);
+      const payload = JSON.parse(body || '{}');
+      const parsed = await parseOfficialFileDirect(payload.filePath);
+
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify(parsed));
+    } catch (error) {
+      res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: error.message }));
+    }
+  });
+
+  workerStartPromise = new Promise((resolve, reject) => {
+    workerServer.once('error', reject);
+    workerServer.listen(0, '127.0.0.1', () => {
+      const address = workerServer.address();
+      workerUrl = `http://127.0.0.1:${address.port}`;
+      console.log(`[kordoc-worker] hidden parser server started at ${workerUrl}`);
+      resolve(workerUrl);
+    });
+  });
+
+  return workerStartPromise;
+}
 
 async function parseOfficialFile(filePath) {
+  if (workerUrl) {
+    return parseViaKordocWorker(filePath);
+  }
+
+  return parseOfficialFileDirect(filePath);
+}
+
+async function parseViaKordocWorker(filePath) {
+  const url = new URL('/parse', workerUrl);
+  const body = JSON.stringify({ filePath: path.resolve(filePath) });
+  const response = await postJson(url, body);
+  const data = response.body ? JSON.parse(response.body) : {};
+
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    throw new Error(data.error || `KORDOC worker failed: ${response.statusCode}`);
+  }
+
+  return data;
+}
+
+async function parseOfficialFileDirect(filePath) {
   const absolutePath = path.resolve(filePath);
 
   if (!fs.existsSync(absolutePath)) {
@@ -29,6 +96,49 @@ async function parseOfficialFile(filePath) {
   }
 
   return normalizeTextResult(markdownResult, 'kordoc-markdown');
+}
+
+function readRequestBody(req) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
+  });
+}
+
+function postJson(url, body) {
+  return new Promise((resolve, reject) => {
+    const request = http.request({
+      hostname: url.hostname,
+      port: url.port,
+      path: url.pathname,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body)
+      },
+      timeout: 120000
+    }, (response) => {
+      const chunks = [];
+
+      response.on('data', (chunk) => chunks.push(chunk));
+      response.on('end', () => {
+        resolve({
+          statusCode: response.statusCode || 0,
+          body: Buffer.concat(chunks).toString('utf8')
+        });
+      });
+    });
+
+    request.on('timeout', () => {
+      request.destroy(new Error('KORDOC worker request timed out.'));
+    });
+    request.on('error', reject);
+    request.write(body);
+    request.end();
+  });
 }
 
 async function parseWithBuiltInFallback(filePath, parserError) {
@@ -341,5 +451,6 @@ function normalizeTextResult(value, parser) {
 }
 
 module.exports = {
-  parseOfficialFile
+  parseOfficialFile,
+  startKordocWorkerServer
 };
