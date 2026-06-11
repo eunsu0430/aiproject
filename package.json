@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
+    "build:exe": "pkg launcher/official-document-launcher.js --targets node18-win-x64 --output 공문관리.exe",
     "mcp": "node server/mcp/kordocMcpServer.js",
     "mcp:kordoc": "node server/mcp/kordocMcpServer.js",
     "mcp:documents": "node server/mcp/officialDocumentMcpServer.js",
@@ -19,5 +20,17 @@
     "multer": "^1.4.5-lts.1",
     "openai": "^4.104.0",
     "pdfjs-dist": "^6.0.227"
+  },
+  "pkg": {
+    "assets": [
+      "public/**/*",
+      "persona/examples/**/*",
+      "node_modules/kordoc/dist/**/*",
+      "node_modules/pdfjs-dist/**/*"
+    ],
+    "scripts": [
+      "server/**/*.js",
+      "launcher/**/*.js"
+    ]
   }
 }

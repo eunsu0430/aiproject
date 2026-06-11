@@ -1,14 +1,19 @@
-const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
-const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js');
-const { z } = require('zod');
 require('dotenv').config();
 
-const server = new McpServer({
+const shouldStartMcpServer = require.main === module;
+const mcpSdk = shouldStartMcpServer ? require('@modelcontextprotocol/sdk/server/mcp.js') : {};
+const mcpTransport = shouldStartMcpServer ? require('@modelcontextprotocol/sdk/server/stdio.js') : {};
+const zod = shouldStartMcpServer ? require('zod') : {};
+const { McpServer } = mcpSdk;
+const { StdioServerTransport } = mcpTransport;
+const { z } = zod;
+
+const server = shouldStartMcpServer ? new McpServer({
   name: 'gmail-reminder-mailer',
   version: '1.0.0'
-});
+}) : null;
 
-const reminderInputSchema = {
+const reminderInputSchema = shouldStartMcpServer ? {
   to: z.string().email(),
   recipientName: z.string().min(1),
   documentTitle: z.string().min(1),
@@ -18,8 +23,9 @@ const reminderInputSchema = {
   requiredAction: z.string().optional(),
   senderName: z.string().optional(),
   customMessage: z.string().optional()
-};
+} : {};
 
+if (server) {
 server.tool(
   'preview_reminder_email',
   '미수신 수신부서 담당자에게 보낼 독촉 메일 제목과 본문을 생성합니다. Gmail에는 저장하거나 발송하지 않습니다.',
@@ -100,6 +106,7 @@ server.tool(
     return toJson(await parseGmailResponse(response, 'gmail.profile'));
   }
 );
+}
 
 function buildReminderEmail(input) {
   const senderName = input.senderName || process.env.GMAIL_SENDER_NAME || '담당자';
@@ -287,7 +294,74 @@ async function main() {
   await server.connect(transport);
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+async function callGmailToolDirect(name, input = {}) {
+  if (name === 'preview_reminder_email') {
+    return buildReminderEmail(input);
+  }
+
+  if (name === 'create_reminder_draft') {
+    const email = buildReminderEmail(input);
+    const draft = await createGmailDraft({
+      to: input.to,
+      subject: email.subject,
+      body: email.body
+    });
+
+    return {
+      ...email,
+      provider: 'gmail',
+      action: 'draft',
+      draftId: draft.id,
+      messageId: draft.message && draft.message.id
+    };
+  }
+
+  if (name === 'send_reminder_email') {
+    const email = buildReminderEmail(input);
+    const message = await sendGmailMessage({
+      to: input.to,
+      subject: email.subject,
+      body: email.body
+    });
+
+    return {
+      ...email,
+      provider: 'gmail',
+      action: 'send',
+      messageId: message.id,
+      threadId: message.threadId
+    };
+  }
+
+  if (name === 'get_gmail_status') {
+    const config = getGmailConfig();
+    return {
+      configured: Boolean(config.clientId && config.clientSecret && config.refreshToken),
+      fromEmail: config.fromEmail || ''
+    };
+  }
+
+  if (name === 'test_gmail_profile') {
+    const accessToken = await getAccessToken();
+    const response = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/profile', {
+      headers: {
+        Authorization: `Bearer ${accessToken}`
+      }
+    });
+
+    return parseGmailResponse(response, 'gmail.profile');
+  }
+
+  throw new Error(`Unknown Gmail MCP tool: ${name}`);
+}
+
+if (shouldStartMcpServer) {
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  callGmailToolDirect
+};

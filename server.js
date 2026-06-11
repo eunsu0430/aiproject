@@ -8,13 +8,12 @@ const { analyzeDocument, extractProductionDocumentInfo } = require('./server/ser
 const { parseOfficialFile } = require('./server/services/kordocMcpClient');
 const { callEmailTool } = require('./server/services/emailMcpClient');
 const { getPublicRuntimeStatus, readRuntimeSettings, writeRuntimeSettings } = require('./server/services/runtimeConfig');
+const { dataDir, publicDir, uploadDir } = require('./server/services/appPaths');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const dataDir = path.join(__dirname, 'data');
 const usersPath = path.join(dataDir, 'users.json');
 const documentsPath = path.join(dataDir, 'documents.json');
-const uploadDir = path.join(__dirname, 'uploads');
 const uploadTempDir = path.join(uploadDir, 'tmp');
 const allowedUploadExtensions = new Set(['.pdf', '.hwp', '.hwpx', '.hwpml', '.docx', '.xls', '.xlsx']);
 
@@ -42,7 +41,7 @@ const upload = multer({
 });
 
 app.use(express.json({ limit: '2mb' }));
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(publicDir));
 
 app.get('/', (req, res) => {
   res.redirect('/dashboard.html');

@@ -2,9 +2,10 @@ const { execFile } = require('child_process');
 const { promisify } = require('util');
 const fs = require('fs');
 const path = require('path');
+const { appRoot } = require('./appPaths');
 
 const execFileAsync = promisify(execFile);
-const projectRoot = path.join(__dirname, '..', '..');
+const projectRoot = appRoot;
 
 async function parseOfficialFile(filePath) {
   const absolutePath = path.resolve(filePath);
@@ -13,10 +14,10 @@ async function parseOfficialFile(filePath) {
     throw new Error(`Upload file not found: ${absolutePath}`);
   }
 
-  const jsonResult = await runKordoc(absolutePath, 'json').catch((error) => ({ error }));
+  const jsonResult = await parseWithKordocApi(absolutePath).catch((error) => ({ error }));
 
   if (!jsonResult.error) {
-    return normalizeKordocResult(jsonResult, 'kordoc-json');
+    return normalizeKordocResult(jsonResult, 'kordoc-api');
   }
 
   const markdownResult = await runKordoc(absolutePath, 'markdown').catch(async (error) => {
@@ -34,7 +35,24 @@ async function parseOfficialFile(filePath) {
   return normalizeTextResult(markdownResult, 'kordoc-markdown');
 }
 
+async function parseWithKordocApi(filePath) {
+  const kordoc = require('kordoc');
+  const buffer = fs.readFileSync(filePath);
+  const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+  const result = await kordoc.parse(arrayBuffer, { filePath });
+
+  if (!result || result.success === false) {
+    throw new Error(result && result.error ? result.error : 'kordoc parse failed');
+  }
+
+  return result;
+}
+
 async function runKordoc(filePath, format) {
+  if (process.pkg) {
+    throw new Error('kordoc CLI is not available inside the standalone EXE.');
+  }
+
   const { command, args } = getKordocCommand(filePath, format);
   const { stdout } = await execFileAsync(command, args, {
     cwd: projectRoot,

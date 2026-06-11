@@ -1,22 +1,11 @@
 const { spawn, spawnSync } = require('child_process');
-const fs = require('fs');
 const http = require('http');
-const path = require('path');
 
-const root = process.pkg ? path.dirname(process.execPath) : path.join(__dirname, '..');
 const appUrl = 'http://127.0.0.1:3000/dashboard.html';
 
 function fail(message) {
   spawn('cmd.exe', ['/c', 'msg', '*', message], { windowsHide: true });
   process.exit(1);
-}
-
-if (!fs.existsSync(path.join(root, 'server.js'))) {
-  fail(`server.js was not found: ${root}`);
-}
-
-if (!fs.existsSync(path.join(root, 'node_modules'))) {
-  fail('node_modules was not found. Run npm install first.');
 }
 
 spawnSync('powershell.exe', [
@@ -30,16 +19,19 @@ spawnSync('powershell.exe', [
   stdio: 'ignore'
 });
 
-spawn('cmd.exe', ['/c', 'npm.cmd', 'start'], {
-  cwd: root,
-  detached: true,
-  stdio: 'ignore',
-  windowsHide: true
-}).unref();
+try {
+  require('../server');
+} catch (error) {
+  fail(`The app failed to start: ${error.message}`);
+}
 
 waitForServer(3000)
   .catch(() => undefined)
-  .finally(openAppWindow);
+  .finally(() => {
+    if (process.env.OFFICIAL_DOCUMENT_MANAGER_NO_BROWSER !== '1') {
+      openAppWindow();
+    }
+  });
 
 function waitForServer(retries) {
   return new Promise((resolve, reject) => {

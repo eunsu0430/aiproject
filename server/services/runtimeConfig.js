@@ -1,8 +1,7 @@
 const fs = require('fs');
 const path = require('path');
+const { dataDir } = require('./appPaths');
 
-const projectRoot = path.join(__dirname, '..', '..');
-const dataDir = path.join(projectRoot, 'data');
 const settingsPath = path.join(dataDir, 'runtime-settings.json');
 
 function readRuntimeSettings() {

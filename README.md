@@ -1,7 +1,8 @@
 # 공문 관리 AI POC
 
-공문 파일을 등록하면 접수 공문과 생산 공문을 구분하고, 마감 일정과 취합 현황을 관리하는 Windows용 POC 프로젝트입니다.  
-사용자는 `공문관리.exe`를 실행해 일반 프로그램처럼 사용할 수 있고, 내부에서는 Node.js 서버와 MCP 도구가 자동으로 동작합니다.
+공문 파일을 등록하면 접수 공문과 생산 공문을 구분하고, 마감 일정과 취합 현황을 관리하는 Windows용 POC 프로젝트입니다.
+
+배포 대상자는 `공문관리.exe` 하나만 실행하면 됩니다. 내부 서버, 화면 파일, 분석 코드, MCP 연동 코드는 EXE 안에 포함되고, 사용자가 등록한 데이터와 환경설정만 각 PC의 로컬 앱데이터 폴더에 저장됩니다.
 
 ## 주요 기능
 
@@ -16,13 +17,7 @@
 
 ## 실행 방법
 
-처음 한 번만 의존성을 설치합니다.
-
-```bash
-npm install
-```
-
-이후에는 프로젝트 폴더에 있는 아래 파일을 실행합니다.
+배포받은 사용자는 아래 파일만 실행하면 됩니다.
 
 ```text
 공문관리.exe
@@ -30,9 +25,17 @@ npm install
 
 실행하면 내부 서버가 자동으로 켜지고 브라우저 앱 창이 열립니다. 사용자는 `localhost` 주소를 직접 다룰 필요가 없습니다.
 
+사용자 데이터는 기본적으로 아래 위치에 저장됩니다.
+
+```text
+%LOCALAPPDATA%\OfficialDocumentManager
+```
+
+저장 위치를 바꾸고 싶으면 실행 전에 `OFFICIAL_DOCUMENT_MANAGER_HOME` 환경변수를 지정할 수 있습니다.
+
 ## 첫 실행 환경설정
 
-처음 실행하면 환경설정 창에서 아래 값을 입력합니다. 입력한 값은 이 PC의 `data/runtime-settings.json`에만 저장되며, `.gitignore`에 의해 GitHub에는 올라가지 않습니다.
+처음 실행하면 환경설정 창에서 아래 값을 입력합니다. 입력한 값은 이 PC의 로컬 앱데이터 폴더에만 저장되며, GitHub에는 올라가지 않습니다.
 
 | 항목 | 필수 | 설명 |
 | --- | --- | --- |
@@ -47,6 +50,12 @@ npm install
 Windows 환경변수에 같은 이름으로 값을 넣어도 사용할 수 있습니다. 앱 화면에서 저장한 값이 있으면 화면 설정값을 우선 사용합니다.
 
 ## 개발 실행
+
+개발자는 처음 한 번만 의존성을 설치합니다.
+
+```bash
+npm install
+```
 
 브라우저에서 직접 확인하고 싶을 때는 서버를 실행합니다.
 
@@ -74,10 +83,10 @@ npm run mcp:gmail
 런처 코드가 바뀐 경우 아래 명령어로 `공문관리.exe`를 다시 만들 수 있습니다.
 
 ```bash
-npx --yes pkg launcher/official-document-launcher.js --targets node18-win-x64 --output 공문관리.exe
+npx --yes pkg --config package.json launcher/official-document-launcher.js --targets node18-win-x64 --output 공문관리.exe
 ```
 
-`공문관리.exe`는 로컬 실행 파일이라 GitHub에는 올리지 않습니다.
+빌드된 `공문관리.exe`는 배포 파일입니다. GitHub 소스 저장소에는 올리지 않고, 필요하면 GitHub Release 같은 별도 배포 채널에 첨부합니다.
 
 ## 보안 및 GitHub 업로드 기준
 
@@ -112,7 +121,7 @@ uploads/                    업로드 문서 저장소, GitHub 제외
 
 ## 동작 방식
 
-1. `공문관리.exe`가 프로젝트 폴더를 기준으로 내부 서버를 실행합니다.
+1. `공문관리.exe`가 EXE 안에 포함된 서버 코드를 실행합니다.
 2. 브라우저 앱 창에서 `dashboard.html`을 엽니다.
 3. 파일 등록 시 KORDOC MCP가 문서를 파싱합니다.
 4. 접수 공문은 OpenAI 1차 분석과 OpenAI 2차 페르소나 평가를 수행합니다.
@@ -124,4 +133,5 @@ uploads/                    업로드 문서 저장소, GitHub 제외
 - 이 프로젝트는 POC 용도입니다.
 - Gmail 기능을 사용하려면 Google Cloud에서 Gmail API를 활성화해야 합니다.
 - OAuth 테스트 앱 상태라면 테스트 사용자에 본인 Google 계정을 추가해야 합니다.
-- 폴더를 다른 PC로 옮긴 뒤에는 `npm install`을 다시 실행해야 할 수 있습니다.
+- 일반 사용자는 Node.js와 `npm install`이 필요 없습니다.
+- 개발자가 소스에서 직접 실행할 때만 Node.js와 `npm install`이 필요합니다.
