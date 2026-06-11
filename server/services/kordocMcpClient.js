@@ -21,11 +21,7 @@ async function parseOfficialFile(filePath) {
   }
 
   const markdownResult = await runKordoc(absolutePath, 'markdown').catch(async (error) => {
-    if (path.extname(absolutePath).toLowerCase() === '.pdf') {
-      return parsePdfWithPdfjs(absolutePath, `${jsonResult.error.message}; ${error.message}`);
-    }
-
-    throw new Error(`kordoc failed: ${jsonResult.error.message}; markdown fallback failed: ${error.message}`);
+    return parseWithBuiltInFallback(absolutePath, `kordoc failed: ${jsonResult.error.message}; markdown fallback failed: ${error.message}`);
   });
 
   if (markdownResult && typeof markdownResult === 'object') {
@@ -35,8 +31,34 @@ async function parseOfficialFile(filePath) {
   return normalizeTextResult(markdownResult, 'kordoc-markdown');
 }
 
+async function parseWithBuiltInFallback(filePath, parserError) {
+  const extension = path.extname(filePath).toLowerCase();
+
+  if (extension === '.pdf') {
+    return parsePdfWithPdfjs(filePath, parserError);
+  }
+
+  if (extension === '.docx') {
+    return parseDocxWithZip(filePath, parserError);
+  }
+
+  if (extension === '.hwpx' || extension === '.hwpml') {
+    return parseHwpxWithZip(filePath, parserError);
+  }
+
+  if (extension === '.xlsx' || extension === '.xls') {
+    return parseSpreadsheetWithZip(filePath, parserError);
+  }
+
+  if (extension === '.hwp') {
+    return parseHwpBinaryFallback(filePath, parserError);
+  }
+
+  throw new Error(parserError);
+}
+
 async function parseWithKordocApi(filePath) {
-  const kordoc = require('kordoc');
+  const kordoc = await import('kordoc');
   const buffer = fs.readFileSync(filePath);
   const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
   const result = await kordoc.parse(arrayBuffer, { filePath });
@@ -82,6 +104,177 @@ function getKordocCommand(filePath, format) {
     command: process.platform === 'win32' ? 'kordoc.cmd' : 'kordoc',
     args
   };
+}
+
+async function loadZip(filePath) {
+  const JSZip = require('jszip');
+  return JSZip.loadAsync(fs.readFileSync(filePath));
+}
+
+async function parseDocxWithZip(filePath, parserError) {
+  const zip = await loadZip(filePath);
+  const documentXml = await readZipText(zip, 'word/document.xml');
+  const text = extractTextFromWordXml(documentXml);
+
+  return {
+    markdown: text,
+    text,
+    metadata: { parserError },
+    parser: 'docx-zip-fallback'
+  };
+}
+
+async function parseHwpxWithZip(filePath, parserError) {
+  const zip = await loadZip(filePath);
+  const sectionFiles = Object.keys(zip.files)
+    .filter((name) => /(?:Contents\/section|BodyText\/section|section)\d+\.xml$/i.test(name))
+    .sort((a, b) => a.localeCompare(b));
+  const texts = [];
+
+  for (const fileName of sectionFiles) {
+    const xml = await readZipText(zip, fileName);
+    const text = extractTextFromXml(xml);
+    if (text) texts.push(text);
+  }
+
+  const text = texts.join('\n\n').trim();
+
+  return {
+    markdown: text,
+    text,
+    metadata: { parserError },
+    parser: 'hwpx-zip-fallback'
+  };
+}
+
+async function parseSpreadsheetWithZip(filePath, parserError) {
+  const zip = await loadZip(filePath);
+  const sharedStrings = await readSharedStrings(zip);
+  const sheetFiles = Object.keys(zip.files)
+    .filter((name) => /^xl\/worksheets\/sheet\d+\.xml$/i.test(name))
+    .sort((a, b) => a.localeCompare(b));
+  const rows = [];
+
+  for (const fileName of sheetFiles) {
+    const xml = await readZipText(zip, fileName);
+    rows.push(...extractRowsFromSheetXml(xml, sharedStrings));
+  }
+
+  const text = rows.map((row) => row.filter(Boolean).join(' ')).filter(Boolean).join('\n');
+
+  return {
+    markdown: text,
+    text,
+    metadata: { parserError },
+    parser: 'xlsx-zip-fallback'
+  };
+}
+
+async function readZipText(zip, fileName) {
+  const file = zip.file(fileName) || findZipFile(zip, fileName);
+
+  if (!file) {
+    return '';
+  }
+
+  return file.async('string');
+}
+
+function findZipFile(zip, fileName) {
+  const normalized = normalizeZipPath(fileName);
+  const actualName = Object.keys(zip.files).find((name) => normalizeZipPath(name) === normalized);
+  return actualName ? zip.file(actualName) : null;
+}
+
+function normalizeZipPath(value) {
+  return String(value || '').replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase();
+}
+
+async function readSharedStrings(zip) {
+  const xml = await readZipText(zip, 'xl/sharedStrings.xml');
+
+  if (!xml) {
+    return [];
+  }
+
+  return Array.from(xml.matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/g))
+    .map((match) => extractTextFromXml(match[1]));
+}
+
+function extractRowsFromSheetXml(xml, sharedStrings) {
+  return Array.from(String(xml || '').matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/g))
+    .map((rowMatch) => Array.from(rowMatch[1].matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/g))
+      .map((cellMatch) => {
+        const attributes = cellMatch[1] || '';
+        const cellXml = cellMatch[2] || '';
+        const rawValue = (cellXml.match(/<v[^>]*>([\s\S]*?)<\/v>/) || [])[1] || '';
+
+        if (/\bt=["']s["']/.test(attributes)) {
+          return sharedStrings[Number(rawValue)] || '';
+        }
+
+        return decodeXml(rawValue);
+      }));
+}
+
+function extractTextFromWordXml(xml) {
+  return Array.from(String(xml || '').matchAll(/<w:p\b[^>]*>([\s\S]*?)<\/w:p>/g))
+    .map((match) => extractTextFromXml(match[1]))
+    .filter(Boolean)
+    .join('\n');
+}
+
+function extractTextFromXml(xml) {
+  return decodeXml(String(xml || '')
+    .replace(/<[^>]*br[^>]*>/gi, '\n')
+    .replace(/<[^>]*tab[^>]*>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim());
+}
+
+function decodeXml(value) {
+  return String(value || '')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .trim();
+}
+
+function parseHwpBinaryFallback(filePath, parserError) {
+  const buffer = fs.readFileSync(filePath);
+  const candidates = [
+    extractReadableText(buffer.toString('utf8')),
+    extractReadableText(buffer.toString('utf16le'))
+  ];
+  const text = candidates
+    .sort((a, b) => getReadableScore(b) - getReadableScore(a))[0]
+    .slice(0, 30000);
+
+  return {
+    markdown: text,
+    text,
+    metadata: { parserError },
+    parser: 'hwp-binary-fallback'
+  };
+}
+
+function extractReadableText(value) {
+  return Array.from(String(value || '').matchAll(/[가-힣A-Za-z0-9()[\]{}.,:;'"!?/@#%&+\-_=~\s]{2,}/g))
+    .map((match) => match[0].replace(/\s+/g, ' ').trim())
+    .filter((item) => item.length >= 2)
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function getReadableScore(value) {
+  const text = String(value || '');
+  const hangul = (text.match(/[가-힣]/g) || []).length;
+  const alphaNumeric = (text.match(/[A-Za-z0-9]/g) || []).length;
+  return hangul * 3 + alphaNumeric;
 }
 
 function normalizeKordocResult(result, parser) {
