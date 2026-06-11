@@ -83,7 +83,7 @@ npm run mcp:gmail
 런처 코드가 바뀐 경우 아래 명령어로 `공문관리.exe`를 다시 만들 수 있습니다.
 
 ```bash
-npx --yes pkg --config package.json launcher/official-document-launcher.js --targets node18-win-x64 --output 공문관리.exe
+npx --yes pkg --no-bytecode --public --config package.json launcher/official-document-launcher.js --targets node18-win-x64 --output 공문관리.exe
 ```
 
 빌드된 `공문관리.exe`는 배포 파일입니다. GitHub 소스 저장소에는 올리지 않고, 필요하면 GitHub Release 같은 별도 배포 채널에 첨부합니다.

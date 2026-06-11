@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "build:exe": "pkg launcher/official-document-launcher.js --targets node18-win-x64 --output 공문관리.exe",
+    "build:exe": "pkg --no-bytecode --public --config package.json launcher/official-document-launcher.js --targets node18-win-x64 --output 공문관리.exe",
     "mcp": "node server/mcp/kordocMcpServer.js",
     "mcp:kordoc": "node server/mcp/kordocMcpServer.js",
     "mcp:documents": "node server/mcp/officialDocumentMcpServer.js",
@@ -19,14 +19,40 @@
     "kordoc": "^2.9.1",
     "multer": "^1.4.5-lts.1",
     "openai": "^4.104.0",
-    "pdfjs-dist": "^6.0.227"
+    "pdfjs-dist": "^4.10.38"
   },
   "pkg": {
     "assets": [
       "public/**/*",
       "persona/examples/**/*",
+      "node_modules/@xmldom/xmldom/**/*",
+      "node_modules/adler-32/**/*",
+      "node_modules/argparse/**/*",
+      "node_modules/cfb/**/*",
+      "node_modules/commander/**/*",
+      "node_modules/core-util-is/**/*",
+      "node_modules/crc-32/**/*",
+      "node_modules/entities/**/*",
+      "node_modules/immediate/**/*",
+      "node_modules/inherits/**/*",
+      "node_modules/isarray/**/*",
+      "node_modules/jszip/**/*",
       "node_modules/kordoc/dist/**/*",
-      "node_modules/pdfjs-dist/**/*"
+      "node_modules/lie/**/*",
+      "node_modules/linkify-it/**/*",
+      "node_modules/markdown-it/**/*",
+      "node_modules/mdurl/**/*",
+      "node_modules/pako/**/*",
+      "node_modules/pdfjs-dist/**/*",
+      "node_modules/process-nextick-args/**/*",
+      "node_modules/punycode.js/**/*",
+      "node_modules/readable-stream/**/*",
+      "node_modules/safe-buffer/**/*",
+      "node_modules/setimmediate/**/*",
+      "node_modules/string_decoder/**/*",
+      "node_modules/uc.micro/**/*",
+      "node_modules/util-deprecate/**/*",
+      "node_modules/zod/**/*"
     ],
     "scripts": [
       "server/**/*.js",

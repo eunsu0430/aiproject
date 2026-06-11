@@ -234,7 +234,11 @@ app.post('/api/documents/upload', upload.single('officialFile'), async (req, res
     const parsedText = parsed.markdown || parsed.text || parsed.content || '';
 
     if (!parsedText.trim()) {
-      return res.status(422).json({ message: '문서 파싱 결과가 비어 있습니다. 파일 형식 또는 내용을 확인해 주세요.' });
+      return res.status(422).json({
+        message: '문서 파싱 결과가 비어 있습니다. 파일 형식 또는 내용을 확인해 주세요.',
+        detail: parsed.metadata && (parsed.metadata.parserError || parsed.metadata.kordocError) || '',
+        parser: parsed.parser || ''
+      });
     }
 
     const originalName = decodeUploadName(req.file.originalname);
@@ -261,7 +265,8 @@ app.post('/api/documents/upload', upload.single('officialFile'), async (req, res
         path: null,
         size: req.file.size,
         mimetype: req.file.mimetype,
-        parser: parsed.parser || 'kordoc'
+        parser: parsed.parser || 'kordoc',
+        parserError: parsed.metadata && (parsed.metadata.parserError || parsed.metadata.kordocError) || ''
       },
       parsedContent: parsedText
     }, documents);

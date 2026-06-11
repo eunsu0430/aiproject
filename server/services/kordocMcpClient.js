@@ -3,7 +3,9 @@ const { promisify } = require('util');
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
-const { appRoot } = require('./appPaths');
+const { pathToFileURL } = require('url');
+const zlib = require('zlib');
+const { appRoot, userDataRoot } = require('./appPaths');
 
 const execFileAsync = promisify(execFile);
 const projectRoot = appRoot;
@@ -87,8 +89,11 @@ async function parseOfficialFileDirect(filePath) {
     return normalizeKordocResult(jsonResult, 'kordoc-api');
   }
 
+  const kordocError = formatError(jsonResult.error);
+  console.warn(`[kordoc:api] ${kordocError}`);
+
   const markdownResult = await runKordoc(absolutePath, 'markdown').catch(async (error) => {
-    return parseWithBuiltInFallback(absolutePath, `kordoc failed: ${jsonResult.error.message}; markdown fallback failed: ${error.message}`);
+    return parseWithBuiltInFallback(absolutePath, `kordoc failed: ${kordocError}; markdown fallback failed: ${formatError(error)}`);
   });
 
   if (markdownResult && typeof markdownResult === 'object') {
@@ -145,7 +150,8 @@ async function parseWithBuiltInFallback(filePath, parserError) {
   const extension = path.extname(filePath).toLowerCase();
 
   if (extension === '.pdf') {
-    return parsePdfWithPdfjs(filePath, parserError);
+    return parsePdfWithPdfjs(filePath, parserError)
+      .catch(() => parsePdfRawTextFallback(filePath, parserError));
   }
 
   if (extension === '.docx') {
@@ -168,16 +174,236 @@ async function parseWithBuiltInFallback(filePath, parserError) {
 }
 
 async function parseWithKordocApi(filePath) {
-  const kordoc = await import('kordoc');
+  const kordoc = await loadKordoc().catch((error) => {
+    throw new Error(`loadKordoc failed: ${formatError(error)}`);
+  });
   const buffer = fs.readFileSync(filePath);
   const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
-  const result = await kordoc.parse(arrayBuffer, { filePath });
+  const result = await kordoc.parse(arrayBuffer, { filePath }).catch((error) => {
+    throw new Error(`kordoc.parse failed: ${formatError(error)}`);
+  });
 
   if (!result || result.success === false) {
     throw new Error(result && result.error ? result.error : 'kordoc parse failed');
   }
 
   return result;
+}
+
+async function loadKordoc() {
+  if (!process.pkg) {
+    return import('kordoc');
+  }
+
+  const kordocDist = process.pkg
+    ? path.join(appRoot, 'node_modules', 'kordoc', 'dist')
+    : path.dirname(require.resolve('kordoc'));
+  const kordocVersion = readPackageVersion(path.join(kordocDist, '..', 'package.json'));
+  const cacheRoot = path.join(userDataRoot, 'runtime-cache', 'kordoc');
+  const cacheDist = path.join(cacheRoot, 'dist');
+  const cacheEntry = path.join(cacheDist, 'index.js');
+  const cacheVersion = `kordoc:${kordocVersion};pdfjs:${getPdfjsVersion()};deps:10`;
+
+  if (!fs.existsSync(cacheEntry) || readCacheVersion(cacheRoot) !== cacheVersion) {
+    fs.rmSync(cacheRoot, { recursive: true, force: true });
+    fs.mkdirSync(cacheRoot, { recursive: true });
+    copyDirectory(kordocDist, cacheDist);
+    copyKordocRuntimeDependencies(cacheRoot);
+    patchCachedKordocDist(cacheDist);
+    fs.writeFileSync(path.join(cacheRoot, 'package.json'), JSON.stringify({ type: 'module' }, null, 2));
+    writeCacheVersion(cacheRoot, cacheVersion);
+  }
+
+  return import(pathToFileURL(cacheEntry).href);
+}
+
+function copyDirectory(sourceDir, targetDir) {
+  fs.mkdirSync(targetDir, { recursive: true });
+
+  fs.readdirSync(sourceDir, { withFileTypes: true }).forEach((entry) => {
+    const sourcePath = path.join(sourceDir, entry.name);
+    const targetPath = path.join(targetDir, entry.name);
+
+    if (entry.isDirectory()) {
+      copyDirectory(sourcePath, targetPath);
+      return;
+    }
+
+    fs.copyFileSync(sourcePath, targetPath);
+  });
+}
+
+function copyKordocRuntimeDependencies(cacheRoot) {
+  const copied = new Set();
+  [
+    '@xmldom/xmldom',
+    'cfb',
+    'commander',
+    'jszip',
+    'markdown-it',
+    'pdfjs-dist',
+    'zod'
+  ].forEach((name) => copyPackageForKordoc(cacheRoot, name, copied));
+
+  writeOptionalModuleStub(path.join(cacheRoot, 'node_modules', '@napi-rs', 'canvas'));
+  writeOptionalModuleStub(path.join(cacheRoot, 'node_modules', 'canvas'));
+}
+
+function patchCachedKordocDist(cacheDist) {
+  const cacheRoot = path.dirname(cacheDist);
+  const pdfjsPath = path.join(cacheDist, '..', 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.mjs');
+  const pdfjsWorkerPath = path.join(cacheDist, '..', 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.worker.mjs');
+  const importSpecifiers = {
+    '@xmldom/xmldom': packageFileUrl(cacheRoot, '@xmldom/xmldom'),
+    jszip: packageFileUrl(cacheRoot, 'jszip'),
+    'markdown-it': packageFileUrl(cacheRoot, 'markdown-it')
+  };
+  const cfbMainPath = packageMainPath(cacheRoot, 'cfb');
+  const pdfjsSpecifier = pathToFileURL(pdfjsPath).href;
+  const pdfjsWorkerSpecifier = pathToFileURL(pdfjsWorkerPath).href;
+
+  fs.readdirSync(cacheDist)
+    .filter((name) => name.endsWith('.js'))
+    .forEach((name) => {
+      const pdfParserPath = path.join(cacheDist, name);
+      const source = fs.readFileSync(pdfParserPath, 'utf8');
+      let patched = source.replaceAll(
+        'require2("cfb")',
+        cfbMainPath ? `require2(${JSON.stringify(cfbMainPath)})` : 'require2("cfb")'
+      );
+
+      Object.entries(importSpecifiers).forEach(([packageName, specifier]) => {
+        if (specifier) {
+          patched = patched.replaceAll(`"${packageName}"`, `"${specifier}"`);
+        }
+      });
+
+      patched = patched.replaceAll(
+        '"pdfjs-dist/legacy/build/',
+        '"../node_modules/pdfjs-dist/legacy/build/'
+      )
+        .replaceAll(
+          '"../node_modules/pdfjs-dist/legacy/build/pdf.mjs"',
+          `"${pdfjsSpecifier}"`
+        )
+        .replace(
+          'import * as pdfjsWorker from "../node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs";',
+          'const pdfjsWorker = {};'
+        )
+        .replace(
+          'GlobalWorkerOptions.workerSrc = "";',
+          `GlobalWorkerOptions.workerSrc = "${pdfjsWorkerSpecifier}";`
+        )
+        .replace(
+          'data: new Uint8Array(buffer),\n    useSystemFonts: true,',
+          'data: new Uint8Array(buffer),\n    disableWorker: true,\n    useWorkerFetch: false,\n    useSystemFonts: true,'
+        );
+
+      if (patched !== source) {
+        fs.writeFileSync(pdfParserPath, patched);
+      }
+    });
+
+  if (!fs.existsSync(pdfjsPath)) {
+    return;
+  }
+
+  const pdfjsSource = fs.readFileSync(pdfjsPath, 'utf8');
+  const pdfjsPatched = pdfjsSource.replaceAll(
+    'canvas = require("@napi-rs/canvas");',
+    'canvas = {};'
+  );
+
+  if (pdfjsPatched !== pdfjsSource) {
+    fs.writeFileSync(pdfjsPath, pdfjsPatched);
+  }
+}
+
+function packageFileUrl(cacheRoot, packageName) {
+  const mainPath = packageMainPath(cacheRoot, packageName);
+  return mainPath ? pathToFileURL(mainPath).href : '';
+}
+
+function packageMainPath(cacheRoot, packageName) {
+  const packageRoot = path.join(cacheRoot, 'node_modules', packageName);
+  const packageJsonPath = path.join(packageRoot, 'package.json');
+
+  if (!fs.existsSync(packageJsonPath)) {
+    return '';
+  }
+
+  try {
+    const pkg = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+    const entry = typeof pkg.main === 'string'
+      ? pkg.main
+      : typeof pkg.module === 'string'
+        ? pkg.module
+        : 'index.js';
+    const entryPath = path.join(packageRoot, entry);
+
+    if (fs.existsSync(entryPath)) {
+      return entryPath;
+    }
+
+    if (!path.extname(entryPath) && fs.existsSync(`${entryPath}.js`)) {
+      return `${entryPath}.js`;
+    }
+
+    return entryPath;
+  } catch (error) {
+    return path.join(packageRoot, 'index.js');
+  }
+}
+
+function copyPackageForKordoc(cacheRoot, packageName, copied) {
+  if (copied.has(packageName)) {
+    return;
+  }
+
+  const sourceRoot = getPackageRoot(packageName);
+  if (!sourceRoot || !fs.existsSync(sourceRoot)) {
+    return;
+  }
+
+  copied.add(packageName);
+  copyDirectory(sourceRoot, path.join(cacheRoot, 'node_modules', packageName));
+
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(sourceRoot, 'package.json'), 'utf8'));
+    Object.keys(pkg.dependencies || {}).forEach((dependency) => copyPackageForKordoc(cacheRoot, dependency, copied));
+  } catch (error) {
+    // Package metadata is optional for the cache copy.
+  }
+}
+
+function getPackageRoot(packageName) {
+  if (process.pkg) {
+    return path.join(appRoot, 'node_modules', packageName);
+  }
+
+  try {
+    let current = path.dirname(require.resolve(packageName));
+
+    while (current && current !== path.dirname(current)) {
+      if (fs.existsSync(path.join(current, 'package.json'))) {
+        return current;
+      }
+      current = path.dirname(current);
+    }
+  } catch (error) {
+    return '';
+  }
+
+  return '';
+}
+
+function writeOptionalModuleStub(moduleRoot) {
+  fs.mkdirSync(moduleRoot, { recursive: true });
+  fs.writeFileSync(path.join(moduleRoot, 'package.json'), JSON.stringify({
+    name: path.basename(moduleRoot),
+    main: 'index.js'
+  }, null, 2));
+  fs.writeFileSync(path.join(moduleRoot, 'index.js'), 'module.exports = {};\n');
 }
 
 async function runKordoc(filePath, format) {
@@ -404,7 +630,7 @@ function normalizeKordocResult(result, parser) {
 }
 
 async function parsePdfWithPdfjs(filePath, kordocError) {
-  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const pdfjs = await loadPdfjs();
   const data = new Uint8Array(fs.readFileSync(filePath));
   const loadingTask = pdfjs.getDocument({
     data,
@@ -435,10 +661,226 @@ async function parsePdfWithPdfjs(filePath, kordocError) {
     markdown: pages.join('\n\n'),
     text: pages.join('\n\n'),
     metadata: {
+      parserError: kordocError,
       kordocError
     },
     parser: 'pdfjs-fallback'
   };
+}
+
+function formatError(error) {
+  if (!error) {
+    return 'Unknown error';
+  }
+
+  if (error.stack) {
+    return error.stack;
+  }
+
+  return error.message || String(error);
+}
+
+function parsePdfRawTextFallback(filePath, parserError) {
+  const buffer = fs.readFileSync(filePath);
+  const chunks = extractPdfTextChunks(buffer);
+  const text = chunks
+    .map((chunk) => normalizePdfText(chunk))
+    .filter(Boolean)
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  return {
+    markdown: text,
+    text,
+    metadata: { parserError },
+    parser: 'pdf-raw-fallback'
+  };
+}
+
+function extractPdfTextChunks(buffer) {
+  const chunks = [];
+  const source = buffer.toString('latin1');
+  const streamPattern = /<<(?:.|\r|\n)*?>>\s*stream\r?\n?([\s\S]*?)\r?\n?endstream/g;
+  let match;
+
+  while ((match = streamPattern.exec(source)) !== null) {
+    const dictionary = match[0].slice(0, match[0].indexOf('stream'));
+    const streamBuffer = Buffer.from(match[1], 'latin1');
+    const decoded = decodePdfStream(streamBuffer, dictionary);
+    chunks.push(...extractPdfTextOperators(decoded));
+  }
+
+  chunks.push(...extractPdfTextOperators(source));
+  return chunks;
+}
+
+function decodePdfStream(streamBuffer, dictionary) {
+  const filters = String(dictionary || '');
+
+  if (/\/FlateDecode\b/.test(filters)) {
+    try {
+      return zlib.inflateSync(trimPdfStreamBuffer(streamBuffer)).toString('latin1');
+    } catch (error) {
+      return streamBuffer.toString('latin1');
+    }
+  }
+
+  return streamBuffer.toString('latin1');
+}
+
+function trimPdfStreamBuffer(buffer) {
+  let start = 0;
+  let end = buffer.length;
+
+  while (start < end && (buffer[start] === 0x0d || buffer[start] === 0x0a)) start += 1;
+  while (end > start && (buffer[end - 1] === 0x0d || buffer[end - 1] === 0x0a)) end -= 1;
+  return buffer.subarray(start, end);
+}
+
+function extractPdfTextOperators(source) {
+  const text = String(source || '');
+  const blocks = Array.from(text.matchAll(/BT([\s\S]*?)ET/g)).map((match) => match[1]);
+  const targets = blocks.length > 0 ? blocks : [text];
+  const chunks = [];
+
+  targets.forEach((block) => {
+    Array.from(block.matchAll(/\((?:\\.|[^\\)])*\)\s*Tj/g)).forEach((match) => {
+      chunks.push(decodePdfLiteral(match[0].replace(/\s*Tj$/, '')));
+    });
+
+    Array.from(block.matchAll(/<([0-9A-Fa-f\s]+)>\s*Tj/g)).forEach((match) => {
+      chunks.push(decodePdfHex(match[1]));
+    });
+
+    Array.from(block.matchAll(/\[((?:.|\r|\n)*?)\]\s*TJ/g)).forEach((match) => {
+      const arrayContent = match[1];
+      Array.from(arrayContent.matchAll(/\((?:\\.|[^\\)])*\)|<([0-9A-Fa-f\s]+)>/g)).forEach((item) => {
+        const value = item[0].startsWith('<')
+          ? decodePdfHex(item[1])
+          : decodePdfLiteral(item[0]);
+        chunks.push(value);
+      });
+      chunks.push('\n');
+    });
+  });
+
+  return chunks;
+}
+
+function decodePdfLiteral(value) {
+  const inner = String(value || '').replace(/^\(/, '').replace(/\)$/, '');
+  const bytes = [];
+
+  for (let index = 0; index < inner.length; index += 1) {
+    const char = inner[index];
+
+    if (char === '\\') {
+      const next = inner[index + 1];
+      if (/[0-7]/.test(next || '')) {
+        const octal = inner.slice(index + 1).match(/^[0-7]{1,3}/)[0];
+        bytes.push(parseInt(octal, 8));
+        index += octal.length;
+        continue;
+      }
+
+      const escaped = { n: 10, r: 13, t: 9, b: 8, f: 12, '\\': 92, '(': 40, ')': 41 }[next];
+      if (escaped !== undefined) {
+        bytes.push(escaped);
+        index += 1;
+        continue;
+      }
+    }
+
+    bytes.push(char.charCodeAt(0) & 0xff);
+  }
+
+  return decodePdfBytes(Buffer.from(bytes));
+}
+
+function decodePdfHex(value) {
+  const clean = String(value || '').replace(/\s+/g, '');
+  const even = clean.length % 2 === 0 ? clean : `${clean}0`;
+  return decodePdfBytes(Buffer.from(even, 'hex'));
+}
+
+function decodePdfBytes(buffer) {
+  if (buffer.length >= 2 && buffer[0] === 0xfe && buffer[1] === 0xff) {
+    return decodeUtf16Be(buffer.subarray(2));
+  }
+
+  if (buffer.includes(0x00)) {
+    return decodeUtf16Be(buffer);
+  }
+
+  return buffer.toString('utf8');
+}
+
+function decodeUtf16Be(buffer) {
+  const evenLength = buffer.length - (buffer.length % 2);
+  return Buffer.from(buffer.subarray(0, evenLength)).swap16().toString('utf16le');
+}
+
+function normalizePdfText(value) {
+  return String(value || '')
+    .replace(/\u0000/g, '')
+    .replace(/[^\S\r\n]+/g, ' ')
+    .replace(/\s+\n/g, '\n')
+    .replace(/\n\s+/g, '\n')
+    .trim();
+}
+
+async function loadPdfjs() {
+  if (!process.pkg) {
+    return import('pdfjs-dist/legacy/build/pdf.mjs');
+  }
+
+  const cacheVersion = `pdfjs:${getPdfjsVersion()}`;
+  const sourcePath = getPdfjsEntryPath();
+  const cacheRoot = path.join(userDataRoot, 'runtime-cache', 'pdfjs-dist');
+  const cacheDir = path.join(cacheRoot, 'legacy', 'build');
+  const cachePath = path.join(cacheDir, 'pdf.mjs');
+
+  if (!fs.existsSync(cachePath) || readCacheVersion(cacheRoot) !== cacheVersion) {
+    fs.rmSync(cacheRoot, { recursive: true, force: true });
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.copyFileSync(sourcePath, cachePath);
+    writeCacheVersion(cacheRoot, cacheVersion);
+  }
+
+  return import(pathToFileURL(cachePath).href);
+}
+
+function getPdfjsVersion() {
+  const pdfjsMain = getPdfjsEntryPath();
+  return readPackageVersion(path.join(pdfjsMain, '..', '..', '..', 'package.json'));
+}
+
+function getPdfjsEntryPath() {
+  return process.pkg
+    ? path.join(appRoot, 'node_modules', 'pdfjs-dist', 'legacy', 'build', 'pdf.mjs')
+    : require.resolve('pdfjs-dist/legacy/build/pdf.mjs');
+}
+
+function readPackageVersion(packagePath) {
+  try {
+    return JSON.parse(fs.readFileSync(path.resolve(packagePath), 'utf8')).version || 'unknown';
+  } catch (error) {
+    return 'unknown';
+  }
+}
+
+function readCacheVersion(cacheRoot) {
+  try {
+    return fs.readFileSync(path.join(cacheRoot, '.version'), 'utf8').trim();
+  } catch (error) {
+    return '';
+  }
+}
+
+function writeCacheVersion(cacheRoot, version) {
+  fs.mkdirSync(cacheRoot, { recursive: true });
+  fs.writeFileSync(path.join(cacheRoot, '.version'), version);
 }
 
 function normalizeTextResult(value, parser) {
