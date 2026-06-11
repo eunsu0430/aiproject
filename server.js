@@ -225,12 +225,21 @@ app.post('/api/documents/:id/recipients/:recipientId/reminder', async (req, res)
 });
 
 app.post('/api/documents/upload', upload.single('officialFile'), async (req, res) => {
+  const uploadStartedAt = Date.now();
+  let parseMs = 0;
+  let buildMs = 0;
+  let parserName = '';
+  let timingLogged = false;
+
   try {
     if (!req.file) {
       return res.status(400).json({ message: '지원하지 않는 파일이거나 파일이 없습니다.' });
     }
 
+    const parseStartedAt = Date.now();
     const parsed = await parseOfficialFile(req.file.path);
+    parseMs = Date.now() - parseStartedAt;
+    parserName = parsed.parser || '';
     const parsedText = parsed.markdown || parsed.text || parsed.content || '';
 
     if (!parsedText.trim()) {
@@ -248,6 +257,7 @@ app.post('/api/documents/upload', upload.single('officialFile'), async (req, res
       stripExtension(originalName)
     ];
     const documents = readDocuments();
+    const buildStartedAt = Date.now();
     const document = await buildDocument({
       title: chooseBestKoreanText(titleCandidates, '제목 없음'),
       sender: (parsed.metadata && (parsed.metadata.author || parsed.metadata.creator)) || extractSenderFromText(parsedText) || '파일 업로드',
@@ -270,9 +280,12 @@ app.post('/api/documents/upload', upload.single('officialFile'), async (req, res
       },
       parsedContent: parsedText
     }, documents);
+    buildMs = Date.now() - buildStartedAt;
 
     documents.push(document);
     writeJsonArray(documentsPath, documents);
+    console.log(`[documents:upload:timing] parser=${parserName || 'unknown'} parse=${parseMs}ms build=${buildMs}ms total=${Date.now() - uploadStartedAt}ms`);
+    timingLogged = true;
     return res.status(201).json(document);
   } catch (error) {
     console.error('[documents:upload]', error);
@@ -281,6 +294,9 @@ app.post('/api/documents/upload', upload.single('officialFile'), async (req, res
       detail: error.message
     });
   } finally {
+    if (!timingLogged && (parseMs || buildMs)) {
+      console.log(`[documents:upload:timing] parser=${parserName || 'unknown'} parse=${parseMs}ms build=${buildMs}ms total=${Date.now() - uploadStartedAt}ms`);
+    }
     cleanupUploadedTempFile(req.file && req.file.path);
   }
 });

@@ -7,23 +7,31 @@ const IMPORTANT_KEYWORDS = ['법정', '감사', '의회', '예산', '재난', '�
 const BROAD_TARGET_KEYWORDS = ['전 부서', '전체 부서', '전직원', '모든 부서', '각 부서'];
 const ACTION_KEYWORDS = ['제출', '검토', '보고', '확인', '회신', '처리', '협조'];
 const KNOWN_DEPARTMENTS = ['기획팀', '운영팀', '총무팀', '인사팀', '재무팀', '안전팀', '감사팀', '행정팀', '민원팀', '시설팀', '교육팀', '복지팀'];
+const OPENAI_TIMEOUT_MS = 8000;
+const OPENAI_CONTENT_LIMIT = 12000;
 
 async function analyzeDocument(document) {
+  const startedAt = Date.now();
   const personas = loadPersonas();
   const documentContext = buildDocumentContext(document);
   const ruleEvaluation = evaluateDocumentRisk(documentContext.content, documentContext.deadline, documentContext.departments);
+  const ruleMs = Date.now() - startedAt;
   const aiEvaluation = await evaluateWithOpenAI(document, documentContext, ruleEvaluation);
+  const aiMs = Date.now() - startedAt - ruleMs;
   const rulePersonaResult = evaluateAllPersonas(document, personas, {
     ...documentContext,
     documentRisk: ruleEvaluation,
     aiEvaluation
   });
+  const personaRuleMs = Date.now() - startedAt - ruleMs - aiMs;
   const personaResult = await evaluatePersonasWithOpenAI(document, personas, {
     ...documentContext,
     documentRisk: ruleEvaluation,
     aiEvaluation
   }, rulePersonaResult);
+  const personaAiMs = Date.now() - startedAt - ruleMs - aiMs - personaRuleMs;
   const importance = calculateFinalImportance(aiEvaluation, ruleEvaluation, personaResult.personaEvaluation);
+  console.log(`[analyze:timing] rule=${ruleMs}ms openai1=${aiMs}ms personaRule=${personaRuleMs}ms openai2=${personaAiMs}ms total=${Date.now() - startedAt}ms`);
 
   return {
     summary: aiEvaluation.summary || summarize(documentContext.content),
@@ -49,7 +57,7 @@ async function extractProductionDocumentInfo(document) {
   }
 
   try {
-    const client = new OpenAI({ apiKey });
+    const client = createOpenAIClient(apiKey);
     const response = await client.chat.completions.create({
       model: config.openaiModel || 'gpt-4o-mini',
       temperature: 0,
@@ -208,7 +216,7 @@ async function evaluateWithOpenAI(document, context, fallbackRisk) {
   }
 
   try {
-    const client = new OpenAI({ apiKey });
+    const client = createOpenAIClient(apiKey);
     const response = await client.chat.completions.create({
       model: config.openaiModel || 'gpt-4o-mini',
       temperature: 0.2,
@@ -230,7 +238,7 @@ async function evaluateWithOpenAI(document, context, fallbackRisk) {
             sender: document.sender,
             department: document.department,
             dueDate: document.dueDate || document.deadline,
-            content: document.content || document.parsedContent || ''
+            content: String(document.content || document.parsedContent || '').slice(0, OPENAI_CONTENT_LIMIT)
           })
         }
       ],
@@ -273,7 +281,8 @@ function buildRuleAiFallback(context, fallbackRisk, aiMode, errorMessage) {
 
 function evaluateAllPersonas(document, personas, context) {
   const normalizedPersonas = Array.isArray(personas) ? personas : [];
-  const evaluations = normalizedPersonas.map((persona) => evaluatePersona(persona, document, context));
+  const personaContext = buildPersonaRuleContext(document, context);
+  const evaluations = normalizedPersonas.map((persona) => evaluatePersona(persona, document, personaContext));
   const sorted = evaluations
     .slice()
     .sort((a, b) => b.score - a.score || RISK_LEVELS.indexOf(b.riskLevel) - RISK_LEVELS.indexOf(a.riskLevel));
@@ -285,11 +294,46 @@ function evaluateAllPersonas(document, personas, context) {
   };
 }
 
+function buildPersonaRuleContext(document, context) {
+  const normalizedContent = normalizeText(context.content);
+  const documentTokens = tokenize(context.content);
+  const normalizedDocumentTokens = documentTokens.map((token) => ({
+    raw: token,
+    normalized: normalizeText(token)
+  })).filter((token) => token.normalized.length >= 2);
+  const candidates = [
+    ...IMPORTANT_KEYWORDS,
+    ...ACTION_KEYWORDS,
+    ...BROAD_TARGET_KEYWORDS,
+    ...KNOWN_DEPARTMENTS,
+    document.department,
+    ...context.departments
+  ]
+    .filter(Boolean)
+    .map((keyword) => ({
+      raw: keyword,
+      normalized: normalizeText(keyword)
+    }))
+    .filter((item) => item.normalized && normalizedContent.includes(item.normalized));
+
+  return {
+    ...context,
+    normalizedContent,
+    documentTokens,
+    normalizedDocumentTokens,
+    matchingCandidates: candidates,
+    hasBroadTarget: hasAnyNormalizedKeyword(normalizedContent, BROAD_TARGET_KEYWORDS),
+    deadlineDiffDays: context.deadline ? getDueDateDiffDays(context.deadline) : null,
+    normalizedDocumentDepartment: normalizeText(document.department),
+    normalizedDepartments: context.departments.map((department) => normalizeText(department)).filter(Boolean)
+  };
+}
+
 async function evaluatePersonasWithOpenAI(document, personas, context, fallbackResult) {
   const config = getRuntimeConfig();
   const apiKey = config.openaiKey;
 
-  if (!apiKey) {
+  if (!apiKey || !context.aiEvaluation || context.aiEvaluation.aiMode !== 'openai') {
     return fallbackResult;
   }
 
@@ -305,7 +349,7 @@ async function evaluatePersonasWithOpenAI(document, personas, context, fallbackR
   }));
 
   try {
-    const client = new OpenAI({ apiKey });
+    const client = createOpenAIClient(apiKey);
     const response = await client.chat.completions.create({
       model: config.openaiModel || 'gpt-4o-mini',
       temperature: 0.1,
@@ -331,7 +375,7 @@ async function evaluatePersonasWithOpenAI(document, personas, context, fallbackR
               sender: document.sender,
               department: document.department,
               deadline: context.deadline,
-              content: context.content.slice(0, 12000)
+              content: context.content.slice(0, OPENAI_CONTENT_LIMIT)
             },
             firstEvaluation: context.aiEvaluation,
             ruleRisk: context.documentRisk,
@@ -426,30 +470,32 @@ function buildRiskDistribution(panel, sourceDistribution) {
 
 function evaluatePersona(persona, document, context) {
   const personaText = [persona.name, persona.role, persona.department, persona.content].filter(Boolean).join(' ');
-  const matchedKeywords = findMatchedKeywords(context.content, personaText, document.department, context.departments);
+  const normalizedPersonaText = normalizeText(personaText);
+  const normalizedPersonaDepartment = normalizeText(persona.department);
+  const matchedKeywords = findMatchedKeywords(context, normalizedPersonaText);
   let score = matchedKeywords.length * 2;
 
   score += Math.floor(context.documentRisk.score / 3);
   score += getRiskBaseScore(context.aiEvaluation.importance);
 
-  if (context.deadline) {
-    const diffDays = getDueDateDiffDays(context.deadline);
+  if (context.deadlineDiffDays !== null) {
+    const diffDays = context.deadlineDiffDays;
     if (diffDays < 0) score += 5;
     else if (diffDays <= 1) score += 4;
     else if (diffDays <= 3) score += 3;
     else if (diffDays <= 7) score += 1;
   }
 
-  if (hasAnyKeyword(context.content, BROAD_TARGET_KEYWORDS)) {
+  if (context.hasBroadTarget) {
     score += 3;
   }
 
-  if (document.department && persona.department && includesLoose(persona.department, document.department)) {
+  if (context.normalizedDocumentDepartment && normalizedPersonaDepartment.includes(context.normalizedDocumentDepartment)) {
     score += 5;
   }
 
-  context.departments.forEach((department) => {
-    if (persona.department && includesLoose(persona.department, department)) {
+  context.normalizedDepartments.forEach((department) => {
+    if (normalizedPersonaDepartment && normalizedPersonaDepartment.includes(department)) {
       score += 4;
     }
   });
@@ -465,26 +511,18 @@ function evaluatePersona(persona, document, context) {
   };
 }
 
-function findMatchedKeywords(documentText, personaText, documentDepartment, departments) {
-  const candidates = [
-    ...IMPORTANT_KEYWORDS,
-    ...ACTION_KEYWORDS,
-    ...BROAD_TARGET_KEYWORDS,
-    ...KNOWN_DEPARTMENTS,
-    documentDepartment,
-    ...departments
-  ].filter(Boolean);
+function findMatchedKeywords(context, normalizedPersonaText) {
   const matched = new Set();
 
-  candidates.forEach((keyword) => {
-    if (includesLoose(documentText, keyword) && includesLoose(personaText, keyword)) {
-      matched.add(keyword);
+  context.matchingCandidates.forEach((keyword) => {
+    if (normalizedPersonaText.includes(keyword.normalized)) {
+      matched.add(keyword.raw);
     }
   });
 
-  tokenize(documentText).forEach((token) => {
-    if (token.length >= 2 && includesLoose(personaText, token)) {
-      matched.add(token);
+  context.normalizedDocumentTokens.forEach((token) => {
+    if (normalizedPersonaText.includes(token.normalized)) {
+      matched.add(token.raw);
     }
   });
 
@@ -779,6 +817,10 @@ function hasAnyKeyword(text, keywords) {
   return keywords.some((keyword) => includesLoose(text, keyword));
 }
 
+function hasAnyNormalizedKeyword(normalizedText, keywords) {
+  return keywords.some((keyword) => normalizedText.includes(normalizeText(keyword)));
+}
+
 function includesLoose(text, keyword) {
   return normalizeText(text).includes(normalizeText(keyword));
 }
@@ -805,6 +847,14 @@ function getDueDateDiffDays(dueDate) {
   }
 
   return Math.ceil((due - today) / (1000 * 60 * 60 * 24));
+}
+
+function createOpenAIClient(apiKey) {
+  return new OpenAI({
+    apiKey,
+    timeout: OPENAI_TIMEOUT_MS,
+    maxRetries: 0
+  });
 }
 
 module.exports = {
